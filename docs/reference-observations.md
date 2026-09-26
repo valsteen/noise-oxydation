@@ -1,6 +1,6 @@
 # Go reference observations
 
-This log records questions found while using the Go project's published documentation as a specification for the Rust implementation. The reference is pinned to [`cfc7520a0625`](https://github.com/sghaida/noise-cancelation/commit/cfc7520a0625da90e4ad4699541a6ffe98e7c637). Entries distinguish a demonstrated documentation error from a possible implementation defect. Go source was inspected only to establish that this revision has no shipped top-level MCRA pipeline; no Go implementation source was copied into Rust.
+This log records questions found while using the Go project's published documentation as a specification for the Rust implementation. The reference is pinned to [`cfc7520a0625`](https://github.com/sghaida/noise-cancelation/commit/cfc7520a0625da90e4ad4699541a6ffe98e7c637). Entries distinguish a demonstrated documentation error from a possible implementation defect. Go source was inspected to diagnose the MCRA minima-window difference and establish that this revision has no shipped top-level MCRA pipeline; no Go implementation source was copied into Rust.
 
 | ID | Status | Observation | Consequence and next evidence |
 | --- | --- | --- | --- |
