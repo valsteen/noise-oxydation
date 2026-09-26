@@ -87,10 +87,10 @@ impl TonalState {
         let mut harmonic = 0.0f32;
         for divisor in 2..=4 {
             let sub = (bin + divisor / 2) / divisor;
-            harmonic = harmonic.max(related_power(power, bin, sub));
+            harmonic = harmonic.max(related_power(power, bin, sub, Some(divisor)));
             let multiple = bin * divisor;
             if multiple < BINS {
-                harmonic = harmonic.max(related_power(power, bin, multiple));
+                harmonic = harmonic.max(related_power(power, bin, multiple, None));
             }
         }
         (tonal, flux, movement, harmonic)
@@ -101,7 +101,7 @@ fn normalize(value: f32, start: f32, full: f32) -> f32 {
     ((value - start) / (full - start)).clamp(0.0, 1.0)
 }
 
-fn related_power(power: &[f32; BINS], bin: usize, related: usize) -> f32 {
+fn related_power(power: &[f32; BINS], bin: usize, related: usize, divisor: Option<usize>) -> f32 {
     let mut peak = 0.0f32;
     for (neighbor, &value) in power
         .iter()
@@ -110,7 +110,12 @@ fn related_power(power: &[f32; BINS], bin: usize, related: usize) -> f32 {
         .skip(related.saturating_sub(1))
     {
         // The candidate's own Hann main lobe is not independent harmonic evidence.
-        if neighbor > 0 && neighbor.abs_diff(bin) > 2 {
+        if neighbor > 0
+            && neighbor.abs_diff(bin) > 2
+            && divisor.is_none_or(|divisor| (neighbor * divisor).abs_diff(bin) <= 1)
+            && value >= power[neighbor - 1]
+            && value >= power[(neighbor + 1).min(BINS - 1)]
+        {
             peak = peak.max(value);
         }
     }
@@ -161,5 +166,11 @@ mod tests {
         overlap[22] = 100.0;
         let gains = TonalState::new().gains(&overlap);
         assert!((gains[21] - 0.782_222_2).abs() < 0.001);
+
+        let mut inharmonic = [1.0; BINS];
+        inharmonic[8] = 100.0;
+        inharmonic[9] = 40.0; // Hann lobe, not another fundamental.
+        inharmonic[28] = 100.0;
+        assert!(detector.features(&inharmonic, 28).3 < 0.1);
     }
 }

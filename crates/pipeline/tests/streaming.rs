@@ -172,6 +172,15 @@ fn check_suppression(seconds: usize, noise_estimator: NoiseEstimator) {
 
 #[test]
 fn speech_harmonics_survive_combined_noise_and_tone() {
+    check_combined_signal(true);
+}
+
+#[test]
+fn speech_bursts_survive_combined_noise_and_tone() {
+    check_combined_signal(false);
+}
+
+fn check_combined_signal(sustained: bool) {
     let mut variants = Vec::new();
     for noise_estimator in [
         NoiseEstimator::SppMmse,
@@ -194,7 +203,7 @@ fn speech_harmonics_survive_combined_noise_and_tone() {
                 let noise = (f32::from((rng >> 16) as i16) / 32_768.0) * 0.03;
                 let time = sample_index as f32 / 8_000.0;
                 let foreground = if sample_index >= 8_000 {
-                    let speech = if (sample_index - 8_000) % 4_800 < 3_200 {
+                    let speech = if sustained || (sample_index - 8_000) % 4_800 < 3_200 {
                         0.27 * (2.0 * std::f32::consts::PI * 250.0 * time).sin()
                             + 0.12 * (2.0 * std::f32::consts::PI * 500.0 * time).sin()
                     } else {
@@ -227,19 +236,23 @@ fn speech_harmonics_survive_combined_noise_and_tone() {
         };
         let input = &input[16_000..24_000];
         let output = &output[16_000..24_000];
-        assert!(
-            amplitude(output, 250.0) > 0.6 * amplitude(input, 250.0),
-            "{noise_estimator:?} speech fundamental: {} / {}",
-            amplitude(output, 250.0),
-            amplitude(input, 250.0)
-        );
-        assert!(
-            amplitude(output, 500.0) > 0.6 * amplitude(input, 500.0),
-            "{noise_estimator:?} speech harmonic"
-        );
+        if !sustained || noise_estimator != NoiseEstimator::Minimum {
+            assert!(
+                amplitude(output, 250.0) > 0.6 * amplitude(input, 250.0),
+                "{noise_estimator:?} speech fundamental: {} / {}",
+                amplitude(output, 250.0),
+                amplitude(input, 250.0)
+            );
+            assert!(
+                amplitude(output, 500.0) > 0.6 * amplitude(input, 500.0),
+                "{noise_estimator:?} speech harmonic"
+            );
+        }
         assert!(
             amplitude(output, 875.0) < 0.95 * amplitude(input, 875.0),
-            "{noise_estimator:?} interference tone"
+            "{noise_estimator:?} interference tone: {} / {}",
+            amplitude(output, 875.0),
+            amplitude(input, 875.0)
         );
         variants.push(output.to_vec());
     }

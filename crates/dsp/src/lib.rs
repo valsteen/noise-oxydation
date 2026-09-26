@@ -262,13 +262,21 @@ impl Enhancer {
             self.tonal.observe(&powers);
         } else {
             self.noise.begin_frame();
+            let sparse_excess = self.noise.selected == NoiseEstimator::Mcra
+                && powers
+                    .iter()
+                    .enumerate()
+                    .filter(|(bin, power)| **power > 5.0 * self.noise.noise[*bin])
+                    .count()
+                    < BINS / 2;
             for (bin, &power) in powers.iter().enumerate() {
                 let posterior = (power / self.noise.noise[bin].max(FLOOR)).min(1.0e6);
                 let prior = (0.98 * self.previous_gain[bin].powi(2) * self.previous_posterior[bin]
                     + 0.02 * (posterior - 1.0).max(0.0))
                 .max(0.001);
                 let v = (posterior * prior / (1.0 + prior)).max(1.0e-6);
-                self.noise.update(bin, power, prior, posterior);
+                self.noise
+                    .update(bin, power, prior, posterior, sparse_excess);
                 let gain = (prior / (1.0 + prior) * (0.5 * exp_integral(v)).exp()).clamp(0.05, 1.0);
                 self.previous_gain[bin] = gain;
                 self.previous_posterior[bin] = posterior;
