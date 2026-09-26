@@ -1,6 +1,7 @@
 //! One pipeline instance owns one 8 kHz mono G.711 μ-law call.
 
 use noise_oxydation_codec::{decode, encode};
+pub use noise_oxydation_dsp::NoiseEstimator;
 use noise_oxydation_dsp::{DspError, Enhancer, HOP};
 use std::error::Error;
 use std::fmt;
@@ -14,12 +15,15 @@ pub const MAX_BATCH_PACKETS: usize = 2;
 pub struct Config {
     /// Quiet call intro used to estimate stationary noise. Default: five seconds.
     pub learning_duration: Duration,
+    /// Noise estimator. Default: SPP-MMSE. Tonal gain follows Log-MMSE for all variants.
+    pub noise_estimator: NoiseEstimator,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             learning_duration: Duration::from_secs(5),
+            noise_estimator: NoiseEstimator::default(),
         }
     }
 }
@@ -129,7 +133,8 @@ impl Pipeline {
             .and_then(|value| u64::try_from(value).ok())
             .filter(|&value| value != 0)
             .ok_or(PipelineError::InvalidLearningDuration)?;
-        let dsp = Enhancer::new(samples).map_err(PipelineError::DspInitialization)?;
+        let dsp = Enhancer::with_estimator(samples, config.noise_estimator)
+            .map_err(PipelineError::DspInitialization)?;
         Ok(Self {
             dsp,
             pending: [0xff; PACKET_SAMPLES],

@@ -1,4 +1,4 @@
-use noise_oxydation_pipeline::{Config, PACKET_SAMPLES, Pipeline};
+use noise_oxydation_pipeline::{Config, NoiseEstimator, PACKET_SAMPLES, Pipeline};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -31,13 +31,28 @@ static ALLOCATOR: Counting = Counting;
 
 #[test]
 fn processing_and_finish_allocate_nothing_after_construction() {
-    let mut pipeline = Pipeline::new(Config::default()).unwrap();
-    let packet = [0x80; PACKET_SAMPLES];
-    COUNTING.store(true, Ordering::Relaxed);
-    for _ in 0..400 {
-        let _ = pipeline.process_packet(&packet).unwrap();
+    for noise_estimator in [
+        NoiseEstimator::SppMmse,
+        NoiseEstimator::Mcra,
+        NoiseEstimator::Minimum,
+    ] {
+        let mut pipeline = Pipeline::new(Config {
+            noise_estimator,
+            ..Config::default()
+        })
+        .unwrap();
+        let packet = [0x80; PACKET_SAMPLES];
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        COUNTING.store(true, Ordering::Relaxed);
+        for _ in 0..400 {
+            let _ = pipeline.process_packet(&packet).unwrap();
+        }
+        let _ = pipeline.finish().unwrap();
+        COUNTING.store(false, Ordering::Relaxed);
+        assert_eq!(
+            ALLOCATIONS.load(Ordering::Relaxed),
+            0,
+            "{noise_estimator:?}"
+        );
     }
-    let _ = pipeline.finish().unwrap();
-    COUNTING.store(false, Ordering::Relaxed);
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
 }

@@ -1,14 +1,20 @@
-//! Fixed-size streaming enhancement at 8 kHz: high-pass, STFT, SPP noise
-//! estimation, decision-directed SNR, Log-MMSE gain, and normalized ISTFT.
+//! Fixed-size streaming enhancement at 8 kHz: high-pass, STFT, selectable noise
+//! estimation, decision-directed SNR, Log-MMSE, tonal gain, and normalized ISTFT.
 #![allow(clippy::cast_precision_loss)] // All loop indices and frame counts here are bounded by the fixed FFT geometry.
 
+mod noise;
+mod tonal;
+
+pub use noise::NoiseEstimator;
+use noise::NoiseState;
 use std::f32::consts::PI;
 use std::fmt;
+use tonal::TonalState;
 
 pub const FRAME: usize = 256;
 pub const HOP: usize = 128;
 const BINS: usize = FRAME / 2 + 1;
-const FLOOR: f32 = 1.0e-10;
+const FLOOR: f32 = 1.0e-12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DspError {
@@ -140,8 +146,8 @@ pub struct Enhancer {
     spectrum: [Complex; FRAME],
     overlap: [f32; FRAME],
     normalization: [f32; FRAME],
-    noise: [f32; BINS],
-    speech_probability: [f32; BINS],
+    noise: NoiseState,
+    tonal: TonalState,
     previous_gain: [f32; BINS],
     previous_posterior: [f32; BINS],
 }
@@ -152,6 +158,17 @@ impl Enhancer {
     /// # Errors
     /// Returns [`DspError::LearningIntervalTooShort`] below one frame.
     pub fn new(learning_samples: u64) -> Result<Self, DspError> {
+        Self::with_estimator(learning_samples, NoiseEstimator::default())
+    }
+
+    /// Construct with a selected noise estimator and default tonal suppression.
+    ///
+    /// # Errors
+    /// Returns [`DspError::LearningIntervalTooShort`] below one frame.
+    pub fn with_estimator(
+        learning_samples: u64,
+        estimator: NoiseEstimator,
+    ) -> Result<Self, DspError> {
         if learning_samples < FRAME as u64 {
             return Err(DspError::LearningIntervalTooShort {
                 samples: learning_samples,
@@ -175,8 +192,8 @@ impl Enhancer {
             spectrum: [Complex::default(); FRAME],
             overlap: [0.0; FRAME],
             normalization: [0.0; FRAME],
-            noise: [FLOOR; BINS],
-            speech_probability: [0.0; BINS],
+            noise: NoiseState::new(estimator),
+            tonal: TonalState::new(),
             previous_gain: [1.0; BINS],
             previous_posterior: [1.0; BINS],
         })
@@ -213,8 +230,8 @@ impl Enhancer {
         self.spectrum.fill(Complex::default());
         self.overlap.fill(0.0);
         self.normalization.fill(0.0);
-        self.noise.fill(FLOOR);
-        self.speech_probability.fill(0.0);
+        self.noise.reset();
+        self.tonal.reset();
         self.previous_gain.fill(1.0);
         self.previous_posterior.fill(1.0);
     }
@@ -230,36 +247,47 @@ impl Enhancer {
             };
         }
         fft(&mut self.spectrum, false);
-        for bin in 0..BINS {
-            let power = self.spectrum[bin].power().max(FLOOR);
-            if learning {
-                self.learned_frames = self.learned_frames.saturating_add(u32::from(bin == 0));
-                let count = self.learned_frames as f32;
-                self.noise[bin] += (power - self.noise[bin]) / count;
-                continue;
+        let mut powers = [FLOOR; BINS];
+        for (bin, power) in powers.iter_mut().enumerate() {
+            *power = self.spectrum[bin].power().max(FLOOR);
+        }
+        if learning {
+            self.learned_frames = self.learned_frames.saturating_add(1);
+            let count = self.learned_frames as f32;
+            for (bin, &power) in powers.iter().enumerate() {
+                self.noise.learn(bin, power, count);
             }
-            if bypass {
-                continue;
+        }
+        if bypass {
+            self.tonal.observe(&powers);
+        } else {
+            self.noise.begin_frame();
+            for (bin, &power) in powers.iter().enumerate() {
+                let posterior = (power / self.noise.noise[bin].max(FLOOR)).min(1.0e6);
+                let prior = (0.98 * self.previous_gain[bin].powi(2) * self.previous_posterior[bin]
+                    + 0.02 * (posterior - 1.0).max(0.0))
+                .max(0.001);
+                let v = (posterior * prior / (1.0 + prior)).max(1.0e-6);
+                self.noise.update(bin, power, prior, posterior);
+                let gain = (prior / (1.0 + prior) * (0.5 * exp_integral(v)).exp()).clamp(0.05, 1.0);
+                self.previous_gain[bin] = gain;
+                self.previous_posterior[bin] = posterior;
+                self.spectrum[bin].re *= gain;
+                self.spectrum[bin].im *= gain;
+                if bin != 0 && bin != FRAME / 2 {
+                    self.spectrum[FRAME - bin].re *= gain;
+                    self.spectrum[FRAME - bin].im *= gain;
+                }
             }
-            let posterior = (power / self.noise[bin].max(FLOOR)).min(1.0e6);
-            let prior = (0.98 * self.previous_gain[bin].powi(2) * self.previous_posterior[bin]
-                + 0.02 * (posterior - 1.0).max(0.0))
-            .max(0.001);
-            let v = (posterior * prior / (1.0 + prior)).max(1.0e-6);
-            let instantaneous = 1.0 / (1.0 + (1.0 + prior) * (-v).exp());
-            let probability = 0.8 * self.speech_probability[bin] + 0.2 * instantaneous;
-            self.speech_probability[bin] = probability;
-            self.noise[bin] = (0.98 * self.noise[bin]
-                + 0.02 * (probability * self.noise[bin] + (1.0 - probability) * power))
-                .max(FLOOR);
-            let gain = (prior / (1.0 + prior) * (0.5 * exp_integral(v)).exp()).clamp(0.05, 1.0);
-            self.previous_gain[bin] = gain;
-            self.previous_posterior[bin] = posterior;
-            self.spectrum[bin].re *= gain;
-            self.spectrum[bin].im *= gain;
-            if bin != 0 && bin != FRAME / 2 {
-                self.spectrum[FRAME - bin].re *= gain;
-                self.spectrum[FRAME - bin].im *= gain;
+            self.noise.end_frame();
+            let tonal_gain = self.tonal.gains(&powers);
+            for (bin, &gain) in tonal_gain.iter().enumerate() {
+                self.spectrum[bin].re *= gain;
+                self.spectrum[bin].im *= gain;
+                if bin != 0 && bin != FRAME / 2 {
+                    self.spectrum[FRAME - bin].re *= gain;
+                    self.spectrum[FRAME - bin].im *= gain;
+                }
             }
         }
         fft(&mut self.spectrum, true);
@@ -288,6 +316,7 @@ impl Enhancer {
 
 #[cfg(test)]
 mod tests {
+    use super::tonal::TonalState;
     use super::{Complex, Enhancer, FRAME, HOP, exp_integral, fft};
 
     #[test]
@@ -320,5 +349,31 @@ mod tests {
         }
         assert_eq!(emitted, FRAME);
         assert_eq!(enhancer.learned_frames, 1);
+    }
+
+    #[test]
+    fn tonal_gain_multiplies_the_log_mmse_spectrum() {
+        let mut enhancer = Enhancer::new(FRAME as u64).unwrap();
+        enhancer.frames = 2;
+        for i in 0..FRAME {
+            enhancer.filtered[i] =
+                0.2 * (2.0 * std::f32::consts::PI * 20.0 * i as f32 / FRAME as f32).sin();
+        }
+        let mut original = [Complex::default(); FRAME];
+        for (i, value) in original.iter_mut().enumerate() {
+            value.re = enhancer.filtered[i] * enhancer.window[i];
+        }
+        fft(&mut original, false);
+        let powers = std::array::from_fn(|bin| original[bin].power().max(super::FLOOR));
+        enhancer.noise.noise = powers;
+        let tonal_gain = TonalState::new().gains(&powers);
+        assert!(tonal_gain[20] < 1.0);
+        let _ = enhancer.process_frame();
+        assert!(enhancer.previous_gain[20] < 1.0);
+        fft(&mut enhancer.spectrum, false);
+        for bin in [18, 19, 20, 21, 22] {
+            let expected = original[bin].re * enhancer.previous_gain[bin] * tonal_gain[bin];
+            assert!((enhancer.spectrum[bin].re - expected).abs() < 0.0002);
+        }
     }
 }
