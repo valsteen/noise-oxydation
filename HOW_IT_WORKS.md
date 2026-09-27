@@ -6,12 +6,12 @@ Noise Oxydation enhances one 8 kHz mono G.711 μ-law call through a `Pipeline`. 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/crates-night.svg">
-  <img src="assets/how-it-works/crates-day.svg" alt="Pipeline owns packet and call state and depends on separate codec and DSP crates.">
+  <img src="assets/how-it-works/crates-day.svg" alt="A Go Call owns an FFI handle to one Pipeline. FFI depends on pipeline, which depends on codec and DSP.">
 </picture>
 
-The Rust 2024 workspace has three crates. `pipeline` owns public configuration, packet buffering, and call lifecycle. It calls `codec` for μ-law conversion and `dsp` for fixed-frame enhancement. Neither lower crate depends on `pipeline`. Each `Pipeline` contains its own estimator, FFT, tonal, and output state.
+The Rust 2024 workspace has four crates. `ffi` exports an opaque C handle for Go; it depends on `pipeline`. Rust callers can use `pipeline` directly. `pipeline` owns configuration, packet buffering, and call lifecycle and calls `codec` for μ-law conversion and `dsp` for fixed-frame enhancement. Dependencies point only toward the processing crates. Each Go `Call` owns one handle and serializes its own process, finish, reset, and close operations. Each `Pipeline` contains its own estimator, FFT, tonal, and output state.
 
-Independent calls can run at the same time when the caller schedules separate `Pipeline` instances. Within one call, packets, FFT hops, estimator updates, and `finish` advance that instance in order. There is no internal worker or shared DSP state.
+Independent calls can run at the same time when the caller schedules separate `Pipeline` instances. Within one call, packets, FFT hops, estimator updates, and `finish` advance that instance in order. The FFI retains no Go buffer. There is no internal worker or shared DSP state.
 
 ## One call's audio flow
 
@@ -38,6 +38,6 @@ The formulas and safeguards chosen where the Go documentation is incomplete are 
 
 `finish` pads the DSP just enough to emit the remaining valid audio and reports the last packet's valid sample count. With fixed 160-sample inputs, a returned final packet currently has 160 valid samples. A second `finish` or a `process_packet` after finishing returns `AlreadyFinished`. `reset` clears the filter, estimator, tonal, FFT, overlap, pending-packet, and finish state while retaining configuration.
 
-Processing and finishing allocate no memory after construction and use no blocking synchronization. The opt-in `logging` feature only writes a status snapshot when the caller explicitly invokes `write_status` outside the audio thread. The opt-in `performance-analysis` examples run offline.
+Rust processing and finishing allocate no memory after construction and use no blocking synchronization. The Go wrapper uses a per-call mutex to make `Close` safe against concurrent processing; Go and cgo scheduling do not carry a hard real-time guarantee. The opt-in `logging` feature only writes a status snapshot when the caller explicitly invokes `write_status` outside the audio thread. The opt-in `performance-analysis` examples run offline.
 
 See [Architecture](ARCHITECTURE.md) for the detailed timing and ownership contract and [README](README.md) for a caller example. The project is [MIT licensed](LICENSE).

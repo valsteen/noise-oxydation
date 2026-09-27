@@ -2,6 +2,8 @@
 
 Noise Oxydation enhances 8 kHz mono telephony audio carried in 160-byte G.711 μ-law packets. One `Pipeline` owns one call, buffers FFT frames, and returns zero or more ordered complete output packets for each input packet. `finish` returns the remaining audio once and reports the final packet's valid sample count. With fixed-size inputs and length-preserving output, that count is currently 160 whenever a packet is returned. `reset` prepares the same instance for another call.
 
+Go programs can import [`github.com/valsteen/noise-oxydation/go`](go/README.md) to use the same Rust packet pipeline without writing cgo. Build the Rust staticlib for the target first, then supply its path through `CGO_LDFLAGS`. The [Go guide](go/README.md) gives exact macOS/Linux commands, a complete buffered call-stream replay, an external-module import check, and representative packet latency and allocation measurements. Each Go `Call` owns a native pipeline and serializes its lifecycle, including `Close`. The Rust process/finish core remains allocation-free and lock-free; Go/cgo scheduling has no hard real-time guarantee.
+
 ```rust
 use noise_oxydation_pipeline::{Config, Pipeline};
 
