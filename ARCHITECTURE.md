@@ -65,6 +65,41 @@ Rules:
 - Error types stay owned by the crate that recognizes the condition. A consumer crate maps them at its boundary into its
   own typed error while preserving the source (`std::error::Error::source`) so callers do not inherit dependencies.
 
+## Go Integration Boundary
+
+A Go call-handling service consumes the library. The Go reference is consumed as ordinary Go packages that the
+application imports and composes itself (one stateful pipeline per call, fed 160-sample chunks). The Rust
+integration keeps that shape, one enhancer per call driven by the application's own call loop, behind a Go package
+that hides every cgo detail.
+
+Boundary decision: a C ABI crate, `crates/bindings/noise-oxydation-capi`, built as a static library and linked into
+the Go binary through cgo, wrapped by an importable Go package in `go/`.
+
+| Option | Why not chosen |
+| --- | --- |
+| Rewrite in Go | Duplicates the implementation and loses the measured Rust behavior |
+| Subprocess or socket service | Adds IPC latency and a second process lifecycle per call for 20 ms packets |
+| WebAssembly runtime in Go (for example wazero) | Pure Go, but slower, and adds a runtime dependency and memory copies per packet |
+| Rust `cdylib` | Works, but a static library produces one self-contained Go binary without runtime library paths |
+
+Rules for the boundary:
+
+- The C ABI mirrors the Rust per-call API: create with a validated configuration, process one 160-byte packet into a
+  caller-owned 160-byte output, drain into a caller-owned two-packet buffer, reset, and free. The C configuration
+  covers every `CallConfig` field; its defaults come from the Rust `Default` so there is one source of truth.
+- Handles are opaque. The Go package owns each handle, frees it on `Close`, and treats use after `Close` as a typed
+  error without calling into Rust.
+- Errors cross as status codes plus structured detail (field, constraint and offending value for configuration
+  errors) in caller-owned storage, without allocation. The Go package maps them into typed Go errors that preserve
+  that detail, so Go callers can match categories with `errors.Is` and read details with `errors.As`.
+- No panic may unwind across the boundary; the C ABI catches unwinding and reports it as a status.
+- `unsafe` code is confined to the C ABI crate, each block with a safety comment; the library keeps
+  `#![forbid(unsafe_code)]`.
+- The hot path allocates nothing on either side: Go passes pointers to its own fixed-size arrays, and the Rust side
+  writes into them.
+- A call handle is used by one goroutine at a time; independent calls run in parallel goroutines with one handle each,
+  as in Rust.
+
 ## Fixed Telephony Geometry
 
 The product scope is 8 kHz mono G.711 μ-law telephony, so the geometry is a set of compile-time constants rather than
