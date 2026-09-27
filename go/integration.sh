@@ -46,7 +46,30 @@ func run(mode noise.ProcessingMode) {
   if valid != 64000 { panic(fmt.Sprintf("valid output %d", valid)) }
   fmt.Printf("external consumer mode %d: %d valid bytes\n", mode, valid)
 }
-func main() { run(noise.Conservative); run(noise.ExperimentalLowDelay) }
+func runPCM(mode noise.ProcessingMode) {
+  config := noise.DefaultConfig()
+  config.Mode = mode
+  processor, err := noise.NewPCMProcessor(config)
+  if err != nil { panic(err) }
+  defer processor.Close()
+  packet := make([]float32, noise.PacketBytes)
+  valid := 0
+  for i := 0; i < 400; i++ {
+    for j := range packet { if i < 250 { packet[j] = 0 } else { packet[j] = float32((i+j)%256-128) / 32768 } }
+    output, err := processor.Process(packet)
+    if err != nil { panic(err) }
+    valid += len(output)
+  }
+  tail, err := processor.Finish()
+  if err != nil { panic(err) }
+  valid += len(tail)
+  if valid != 64000 { panic(fmt.Sprintf("valid PCM output %d", valid)) }
+  fmt.Printf("external PCM consumer mode %d: %d valid samples\n", mode, valid)
+}
+func main() {
+  run(noise.Conservative); run(noise.ExperimentalLowDelay)
+  runPCM(noise.Conservative); runPCM(noise.ExperimentalLowDelay)
+}
 EOF
 go test ./...
 go run .
