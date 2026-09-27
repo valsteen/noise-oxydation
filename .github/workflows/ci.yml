@@ -101,17 +101,22 @@ jobs:
       - name: Call-stream example on synthetic input (checks packet counts and loop allocations)
         working-directory: go
         run: go run ./examples/callstream -synthetic 3000 -passes 2 -parallel 4 -parallel-seconds 10
-      - name: Separate consumer module importing the package
+      # The package is copied outside the checkout, like a module in the Go module cache: its built-in
+      # `-L${SRCDIR}/../target/release` then points nowhere, so only CGO_LDFLAGS can find the static library.
+      - name: Separate consumer module importing a copy of the package outside the checkout
         env:
           CGO_ENABLED: "1"
           CGO_LDFLAGS: -L${{ github.workspace }}/target/release
         run: |
+          module="$RUNNER_TEMP/module/go"
+          mkdir -p "$(dirname "$module")"
+          cp -R "$GITHUB_WORKSPACE/go" "$module"
           consumer="$RUNNER_TEMP/consumer"
           mkdir -p "$consumer"
           cd "$consumer"
           go mod init example.com/consumer
           go mod edit -require=github.com/valsteen/noise-oxydation-claude/go@v0.0.0 \
-            -replace=github.com/valsteen/noise-oxydation-claude/go="$GITHUB_WORKSPACE/go"
+            -replace=github.com/valsteen/noise-oxydation-claude/go="$module"
           cat > main.go <<'GO'
           package main
 

@@ -3,6 +3,7 @@ package noiseox_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"runtime"
 	"sync"
@@ -80,12 +81,22 @@ func mustNew(t testing.TB, config noiseox.Config) *noiseox.Call {
 // enhance streams packets through call, drains it, and returns the complete output.
 func enhance(t testing.TB, call *noiseox.Call, packets []packet) []byte {
 	t.Helper()
+	output, err := enhanceCall(call, packets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output
+}
+
+// enhanceCall streams packets through call and drains it. It reports failures as errors rather than through a
+// testing.TB so that it can run on goroutines other than the test's own.
+func enhanceCall(call *noiseox.Call, packets []packet) ([]byte, error) {
 	output := make([]byte, 0, len(packets)*noiseox.PacketSize)
 	var out packet
 	for i := range packets {
 		emitted, err := call.ProcessPacket(&packets[i], &out)
 		if err != nil {
-			t.Fatalf("ProcessPacket %d: %v", i, err)
+			return nil, fmt.Errorf("ProcessPacket %d: %w", i, err)
 		}
 		if emitted {
 			output = append(output, out[:]...)
@@ -94,12 +105,12 @@ func enhance(t testing.TB, call *noiseox.Call, packets []packet) []byte {
 	var tail [noiseox.DelayPackets]packet
 	n, err := call.Drain(&tail)
 	if err != nil {
-		t.Fatalf("Drain: %v", err)
+		return nil, fmt.Errorf("drain: %w", err)
 	}
 	for i := range n {
 		output = append(output, tail[i][:]...)
 	}
-	return output
+	return output, nil
 }
 
 func TestDefaultConfigIsTheRustDefault(t *testing.T) {
@@ -558,17 +569,21 @@ func TestParallelCallsEqualSequentialCalls(t *testing.T) {
 		sequential[i] = enhance(t, mustNew(t, rustDigests[i%len(rustDigests)].config()), inputs[i])
 	}
 	parallel := make([][]byte, calls)
+	errs := make([]error, calls)
 	var wg sync.WaitGroup
 	for i := range calls {
 		call := mustNew(t, rustDigests[i%len(rustDigests)].config())
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			parallel[i] = enhance(t, call, inputs[i])
+			parallel[i], errs[i] = enhanceCall(call, inputs[i])
 		}()
 	}
 	wg.Wait()
 	for i := range calls {
+		if errs[i] != nil {
+			t.Fatalf("parallel call %d: %v", i, errs[i])
+		}
 		if !bytes.Equal(parallel[i], sequential[i]) {
 			t.Fatalf("call %d differs between parallel and sequential runs", i)
 		}

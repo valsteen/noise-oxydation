@@ -103,7 +103,8 @@ CGO_ENABLED=1 go build ./...
 ```
 
 With the replace directive the package finds the library in the checkout's `target/release` by itself. CI builds a
-separate consumer module exactly this way, with `CGO_LDFLAGS` set as below.
+separate consumer module against a copy of the package placed outside the checkout, where that built-in path finds
+nothing and only `CGO_LDFLAGS`, set as below, locates the library: the same situation as a module in the module cache.
 
 To fetch the module from GitHub instead, the repository being private, tell Go not to use the public proxy and checksum
 database, and give Git access to it. The module cache holds only the Go sources, so the static library still comes
@@ -269,5 +270,5 @@ time only, a loop without network or codec work around it, and an allocation cou
   one of the 41 fields reaching Rust, use after `Close`, reset equivalence, parallel calls equal to sequential ones,
   output digests equal to those of the Rust tests, zero allocations, and benchmarks.
 - CI runs a Go integration job on Linux and macOS: it builds the static library, checks `gofmt`, runs `go vet` and
-  `go test -race`, runs the example on synthetic input, and builds and runs a separate consumer module that imports
-  the package through a `replace` directive and `CGO_LDFLAGS`.
+  `go test -race`, runs the example on synthetic input, and builds and runs a separate consumer module that imports a
+  copy of the package outside the checkout through a `replace` directive, linked by `CGO_LDFLAGS` alone.
