@@ -2,7 +2,8 @@
 
 use noise_oxydation_codec::{decode, encode};
 use noise_oxydation_pipeline::{
-    Config, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline, PipelineError, ProcessingMode,
+    Config, DspError, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline, PipelineError,
+    ProcessingMode,
 };
 use std::error::Error;
 use std::time::Duration;
@@ -162,6 +163,35 @@ fn constructor_errors_keep_the_dsp_cause() {
     };
     assert!(matches!(error, PipelineError::DspInitialization(_)));
     assert!(error.source().is_some());
+    for samples in [256_u64, 319] {
+        let duration = Duration::from_nanos(samples * 125_000);
+        let Err(PipelineError::DspInitialization(DspError::LearningIntervalTooShort {
+            samples: got,
+            minimum,
+        })) = Pipeline::new_with_mode(
+            Config {
+                learning_duration: duration,
+                ..Config::default()
+            },
+            ProcessingMode::ExperimentalLowDelay,
+        )
+        else {
+            panic!(
+                "experimental intro of {samples} samples must not start with an empty noise baseline"
+            );
+        };
+        assert_eq!((got, minimum), (samples, 320));
+    }
+    assert!(
+        Pipeline::new_with_mode(
+            Config {
+                learning_duration: Duration::from_millis(40),
+                ..Config::default()
+            },
+            ProcessingMode::ExperimentalLowDelay
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -252,25 +282,38 @@ fn check_suppression(seconds: usize, noise_estimator: NoiseEstimator, mode: Proc
 
 #[test]
 fn speech_harmonics_survive_combined_noise_and_tone() {
-    check_combined_signal(true);
+    for mode in [
+        ProcessingMode::Conservative,
+        ProcessingMode::ExperimentalLowDelay,
+    ] {
+        check_combined_signal(true, mode);
+    }
 }
 
 #[test]
 fn speech_bursts_survive_combined_noise_and_tone() {
-    check_combined_signal(false);
+    for mode in [
+        ProcessingMode::Conservative,
+        ProcessingMode::ExperimentalLowDelay,
+    ] {
+        check_combined_signal(false, mode);
+    }
 }
 
-fn check_combined_signal(sustained: bool) {
+fn check_combined_signal(sustained: bool, mode: ProcessingMode) {
     let mut variants = Vec::new();
     for noise_estimator in [
         NoiseEstimator::SppMmse,
         NoiseEstimator::Mcra,
         NoiseEstimator::Minimum,
     ] {
-        let mut pipeline = Pipeline::new(Config {
-            learning_duration: Duration::from_secs(1),
-            noise_estimator,
-        })
+        let mut pipeline = Pipeline::new_with_mode(
+            Config {
+                learning_duration: Duration::from_secs(1),
+                noise_estimator,
+            },
+            mode,
+        )
         .unwrap();
         let mut input = Vec::new();
         let mut output = Vec::new();

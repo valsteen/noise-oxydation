@@ -105,6 +105,10 @@ func TestConstructorErrorsAndConcurrentClose(t *testing.T) {
 	if !errors.As(err, &typed) || typed.Status != StatusDSPInit || typed.Samples != 160 || typed.Minimum != 256 {
 		t.Fatalf("short duration: %v", err)
 	}
+	_, err = New(Config{LearningDuration: 32 * time.Millisecond, Mode: ExperimentalLowDelay})
+	if !errors.As(err, &typed) || typed.Status != StatusDSPInit || typed.Samples != 256 || typed.Minimum != 320 {
+		t.Fatalf("short experimental duration: %v", err)
+	}
 	_, err = New(Config{LearningDuration: time.Second, Estimator: 99})
 	wantStatus(t, err, StatusEstimator)
 	call, err := New(DefaultConfig())
