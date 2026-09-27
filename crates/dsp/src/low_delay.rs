@@ -10,6 +10,7 @@ const PREPAD: usize = FRAME - LOW_HOP;
 const SYNTH: usize = LOW_HOP * 2;
 const TAIL: usize = FRAME - SYNTH;
 const HISTORY: usize = 80; // 800 ms at the 10 ms experimental hop.
+const MIN_LEARNING: usize = FRAME.div_ceil(LOW_HOP) * LOW_HOP;
 
 pub struct LowDelayEnhancer {
     learning_samples: u64,
@@ -31,18 +32,19 @@ pub struct LowDelayEnhancer {
 }
 
 impl LowDelayEnhancer {
-    /// Build per-call state. The quiet intro must contain a complete analysis frame.
+    /// Build per-call state. The quiet intro must contain a complete analysis
+    /// frame ending on an 80-sample hop boundary (320 samples minimum).
     ///
     /// # Errors
-    /// Returns [`DspError::LearningIntervalTooShort`] below one frame.
+    /// Returns [`DspError::LearningIntervalTooShort`] below 320 samples.
     pub fn with_estimator(
         learning_samples: u64,
         estimator: NoiseEstimator,
     ) -> Result<Self, DspError> {
-        if learning_samples < FRAME as u64 {
+        if learning_samples < MIN_LEARNING as u64 {
             return Err(DspError::LearningIntervalTooShort {
                 samples: learning_samples,
-                minimum: FRAME as u64,
+                minimum: MIN_LEARNING as u64,
             });
         }
         let mut analysis = [0.0; FRAME];
@@ -213,6 +215,18 @@ mod tests {
             let b = enhancer.analysis[TAIL + LOW_HOP + i] * enhancer.synthesis[TAIL + LOW_HOP + i];
             assert!((a + b - 1.0).abs() < 1.0e-5, "bin {i}: {}", a + b);
         }
+    }
+
+    #[test]
+    fn shortest_accepted_intro_learns_a_real_frame() {
+        assert!(LowDelayEnhancer::with_estimator(319, NoiseEstimator::SppMmse).is_err());
+        let mut enhancer = LowDelayEnhancer::with_estimator(320, NoiseEstimator::SppMmse).unwrap();
+        for index in 0..320 {
+            let sample = 0.15 * (2.0 * PI * 250.0 * index as f32 / 8_000.0).sin();
+            let _ = enhancer.push(sample);
+        }
+        assert_eq!(enhancer.learned_frames, 1);
+        assert!(enhancer.noise.noise.iter().any(|&power| power > FLOOR));
     }
 
     #[test]

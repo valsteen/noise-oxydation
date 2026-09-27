@@ -28,7 +28,7 @@ Independent calls can run at the same time when the caller schedules separate `P
 
 `process_packet(&[u8; 160])` decodes each 20 ms packet. A first-order high-pass filter feeds a 256-point short-time Fourier transform (STFT). The default conservative mode uses a periodic Hann window and advances every 128 samples. One input packet can complete zero, one, or two conservative hops, so its result can contain zero, one, or two **whole** output packets.
 
-The default `learning_duration` is five seconds and assumes a quiet intro. Complete FFT windows wholly inside the interval update the noise baseline. Frames starting before the conservative cutoff emit the original decoded PCM instead of filtered, reconstructed audio. With the default 40,000-sample interval, the first conservative suppressed frame starts at sample 40,064 (5.008 seconds). A different call setup can configure another duration; at least one complete 256-sample frame is required.
+The default `learning_duration` is five seconds and assumes a quiet intro. Complete FFT windows wholly inside the interval update the noise baseline. Frames starting before the conservative cutoff emit the original decoded PCM instead of filtered, reconstructed audio. With the default 40,000-sample interval, the first conservative suppressed frame starts at sample 40,064 (5.008 seconds). A different call setup can configure another duration. The conservative minimum is 256 samples; the experimental minimum is 320 samples, enough for a real-input frame to end on its 80-sample hop boundary.
 
 After the intro, the selected estimator updates one call-owned noise spectrum:
 

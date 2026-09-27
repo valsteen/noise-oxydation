@@ -23,7 +23,7 @@ for index in 0..tail.len() {
 }
 ```
 
-The example's `send_valid_audio` stands for the caller's transport. This crate does not provide one. Processing after `finish` returns `AlreadyFinished` until `reset`. Configuration accepts a runtime `learning_duration` and a `noise_estimator` selected from `NoiseEstimator::{SppMmse, Mcra, Minimum}`. SPP-MMSE and five seconds are the defaults. For example, use `Config { noise_estimator: NoiseEstimator::Mcra, ..Config::default() }`. Intervals shorter than one 256-sample FFT window are rejected with a typed DSP cause.
+The example's `send_valid_audio` stands for the caller's transport. This crate does not provide one. Processing after `finish` returns `AlreadyFinished` until `reset`. Configuration accepts a runtime `learning_duration` and a `noise_estimator` selected from `NoiseEstimator::{SppMmse, Mcra, Minimum}`. SPP-MMSE and five seconds are the defaults. For example, use `Config { noise_estimator: NoiseEstimator::Mcra, ..Config::default() }`. The minimum learning interval is 256 samples in conservative mode and 320 samples in experimental mode, so each accepts at least one complete learning frame; shorter intervals return a typed DSP cause.
 
 For the experimental mode, construct the call with `Pipeline::new_with_mode(config, ProcessingMode::ExperimentalLowDelay)`. The usual `Pipeline::new(config)` remains conservative. Go callers can set `Config.Mode` to `ExperimentalLowDelay`; the zero value stays conservative.
 
