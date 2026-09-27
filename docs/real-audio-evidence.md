@@ -1,5 +1,7 @@
 # Real speech and offline timing evidence
 
+This page records the conservative mode's original replay and portable/native codegen comparison. The [two-mode comparison](processing-modes.md) adds experimental lower-delay timing, a second voice, and the observed quality tradeoff.
+
 The offline replay exercises the public 160-byte μ-law packet API with one deterministic input stream. Its speech source is [OSR_us_000_0010_8k.wav](https://www.voiptroubleshooter.com/open_speech/american/OSR_us_000_0010_8k.wav), credited to **Open Speech Repository**. The [catalog](https://www.voiptroubleshooter.com/open_speech/american.html) identifies it as 8 kHz 16-bit PCM. The retrieved file is RIFF/WAVE, mono, 8 kHz, signed 16-bit little-endian PCM, 268,985 samples (33.623125 seconds), 538,014 bytes, SHA-256 `a4bf9becd046d7aedb6d05b6e12347a6294a44f74d263089c636fb0a2b1e6561`. The source clip and all generated audio stay outside Git.
 
 ## Reproduce the replay
@@ -12,7 +14,7 @@ cargo run --release --locked -p noise-oxydation-pipeline --features performance-
 shasum -a 256 /private/tmp/OSR_us_000_0010_8k-prepared.mulaw
 ```
 
-On systems with `sha256sum` instead of `shasum`, use `sha256sum` for the two hash commands. The example accepts any 8 kHz mono 16-bit PCM WAV longer than 1,600 samples. Its second and third arguments are optional local destinations for the prepared μ-law stream and per-estimator μ-law output. The WAV parser rejects unsupported or malformed format and chunk metadata. Compare the source hash with the value above before treating a run as this representative experiment.
+On systems with `sha256sum` instead of `shasum`, use `sha256sum` for the two hash commands. The example accepts any 8 kHz mono 16-bit PCM WAV longer than 1,600 samples. Its second and third arguments are optional local destinations for the prepared μ-law stream and per-estimator μ-law output; a fourth optional argument selects `conservative` (the default) or `experimental`. The WAV parser rejects unsupported or malformed format and chunk metadata. Compare the source hash with the value above before treating a run as this representative experiment.
 
 Preparation uses LCG seed `0x5eed1234`, recurrence `state = state × 1664525 + 1013904223` modulo 2³², and noise `((state >> 16) as i16)/32768 × 0.03`. Samples `[0,40000)` contain noise alone during the five-second calibration. Samples `[40000,48000)` contain noise alone after calibration. The source speech plus continued noise begins at sample 48,000. The last partial 160-sample input packet is padded with μ-law silence; the clip's 268,985 speech samples produce 317,120 packet input samples in all. The prepared input SHA-256 is `ac50c854bbc0500ee478376a1bc74e339d53257170974685403a1674430a082f`. All three estimators receive those same bytes through `Pipeline::process_packet` and `finish`.
 

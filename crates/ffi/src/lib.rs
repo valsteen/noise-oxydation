@@ -1,7 +1,7 @@
 //! C ABI for one Rust pipeline per call. Raw C callers serialize each handle.
 
 use noise_oxydation_pipeline::{
-    Config, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline, PipelineError,
+    Config, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline, PipelineError, ProcessingMode,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
@@ -15,6 +15,7 @@ const DURATION: u32 = 5;
 const DSP_INIT: u32 = 6;
 const FINISHED: u32 = 7;
 const PANIC: u32 = 8;
+const MODE: u32 = 10;
 const OUTPUT_BYTES: usize = 2 * PACKET_SAMPLES;
 
 /// Opaque to C. One owner must serialize access to a handle.
@@ -91,6 +92,23 @@ pub unsafe extern "C" fn no_create(
     estimator: u32,
     out: *mut *mut NoCall,
 ) -> NoResult {
+    // SAFETY: This forwards the same caller-owned out pointer and keeps the
+    // legacy constructor on the conservative path.
+    unsafe { no_create_with_mode(learning_duration_ns, estimator, 0, out) }
+}
+
+/// Construct one call with a selected processing mode (0 conservative,
+/// 1 experimental lower delay). Existing `no_create` remains conservative.
+///
+/// # Safety
+/// `out` must point to writable storage when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn no_create_with_mode(
+    learning_duration_ns: u64,
+    estimator: u32,
+    mode: u32,
+    out: *mut *mut NoCall,
+) -> NoResult {
     boundary(|| {
         if out.is_null() {
             return NoResult::error(NULL);
@@ -103,10 +121,18 @@ pub unsafe extern "C" fn no_create(
             2 => NoiseEstimator::Minimum,
             _ => return NoResult::error(ESTIMATOR),
         };
-        let pipeline = match Pipeline::new(Config {
-            learning_duration: Duration::from_nanos(learning_duration_ns),
-            noise_estimator,
-        }) {
+        let mode = match mode {
+            0 => ProcessingMode::Conservative,
+            1 => ProcessingMode::ExperimentalLowDelay,
+            _ => return NoResult::error(MODE),
+        };
+        let pipeline = match Pipeline::new_with_mode(
+            Config {
+                learning_duration: Duration::from_nanos(learning_duration_ns),
+                noise_estimator,
+            },
+            mode,
+        ) {
             Ok(pipeline) => pipeline,
             Err(error) => return NoResult::from_pipeline(&error),
         };

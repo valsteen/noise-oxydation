@@ -27,7 +27,17 @@ const (
 type Config struct {
 	LearningDuration time.Duration
 	Estimator        Estimator
+	Mode             ProcessingMode
 }
+
+// ProcessingMode is selected once per call. ExperimentalLowDelay trades a
+// shorter output wait for unvalidated audio-quality and CPU differences.
+type ProcessingMode uint32
+
+const (
+	Conservative ProcessingMode = iota
+	ExperimentalLowDelay
+)
 
 func DefaultConfig() Config { return Config{LearningDuration: 5 * time.Second} }
 
@@ -43,6 +53,7 @@ const (
 	StatusFinished
 	StatusPanic
 	StatusClosed
+	StatusMode
 )
 
 // Error preserves the C status and the minimum DSP learning interval in samples.
@@ -75,7 +86,7 @@ func New(config Config) (*Call, error) {
 		return nil, &Error{Status: StatusDuration}
 	}
 	var handle *C.NoCall
-	r := C.no_create(C.uint64_t(config.LearningDuration), C.uint32_t(config.Estimator), &handle)
+	r := C.no_create_with_mode(C.uint64_t(config.LearningDuration), C.uint32_t(config.Estimator), C.uint32_t(config.Mode), &handle)
 	if err := status(r); err != nil {
 		return nil, err
 	}

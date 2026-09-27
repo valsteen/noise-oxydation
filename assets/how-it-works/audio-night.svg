@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="565" viewBox="0 0 1000 565" role="img" aria-labelledby="title description">
 <title id="title">Packet enhancement and quiet-intro bypass</title>
-<desc id="description">One 160-byte mu-law packet is decoded. High-pass and 256-point STFT analyze 128-sample hops. After learning, selected noise estimation, Log-MMSE, tonal gain and synthesis feed encoded output. During quiet-intro learning, original decoded audio bypasses suppression.</desc>
+<desc id="description">One 160-byte mu-law packet is decoded. High-pass and 256-point STFT use 128-sample conservative or 80-sample experimental hops. After learning, selected noise estimation, Log-MMSE, tonal gain and synthesis feed encoded output. During quiet-intro learning, original decoded audio bypasses suppression.</desc>
 <defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 H 0 V 24" fill="none" stroke="#45535f" stroke-width="1"/></pattern><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#9ba8b1"/></marker><marker id="bypass-arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#9b948b"/></marker></defs>
 <rect width="1000" height="565" fill="#1c2127"/><rect width="1000" height="565" fill="url(#grid)"/><rect x="1" y="1" width="998" height="563" fill="none" stroke="#45515c" stroke-width="2"/>
 <rect x="40" y="215" width="175" height="110" fill="#242b32" stroke="#5e6a74" stroke-width="1.5"/><rect x="40" y="215" width="6" height="110" fill="#91a7bb"/>
@@ -20,8 +20,8 @@
 <text x="62" y="296" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">160 bytes / 20 ms</text>
 <text x="297" y="106" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">FRAME ANALYSIS</text>
 <text x="297" y="135" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">High-pass + STFT</text>
-<text x="297" y="161" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Hann, 256 samples</text>
-<text x="297" y="181" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">128-sample hop</text>
+<text x="297" y="161" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">256-sample analysis</text>
+<text x="297" y="181" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">128 / 80 sample hop</text>
 <text x="537" y="106" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">NOISE AND GAIN</text>
 <text x="537" y="135" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Noise + Log-MMSE</text>
 <text x="537" y="161" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">SPP-MMSE default</text>
@@ -29,7 +29,7 @@
 <text x="782" y="106" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">SYNTHESIS</text>
 <text x="782" y="135" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Tonal + inverse FFT</text>
 <text x="782" y="161" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">all estimators</text>
-<text x="782" y="181" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">overlap normalization</text>
+<text x="782" y="181" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">full / short synthesis</text>
 <text x="297" y="406" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">QUIET INTRO</text>
 <text x="297" y="435" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Original PCM bypass</text>
 <text x="297" y="461" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">frames before cutoff</text>

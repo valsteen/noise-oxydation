@@ -19,7 +19,14 @@ func percentile(sorted []time.Duration, percent int) time.Duration {
 
 func main() {
 	inputPath := flag.String("input", "", "packet-aligned representative μ-law call")
+	modeName := flag.String("mode", "conservative", "conservative or experimental")
 	flag.Parse()
+	modes := map[string]noise.ProcessingMode{"conservative": noise.Conservative, "experimental": noise.ExperimentalLowDelay}
+	mode, ok := modes[*modeName]
+	if !ok {
+		fmt.Fprintln(os.Stderr, "mode must be conservative or experimental")
+		os.Exit(2)
+	}
 	input, err := os.ReadFile(*inputPath)
 	if err != nil || len(input) == 0 || len(input)%noise.PacketBytes != 0 {
 		fmt.Fprintln(os.Stderr, "input must be a nonempty packet-aligned μ-law file:", err)
@@ -29,7 +36,7 @@ func main() {
 	var packet [noise.PacketBytes]byte
 	var output [noise.OutputBytes]byte
 	for _, estimator := range []noise.Estimator{noise.SppMmse, noise.Mcra, noise.Minimum} {
-		call, err := noise.New(noise.Config{LearningDuration: 5 * time.Second, Estimator: estimator})
+		call, err := noise.New(noise.Config{LearningDuration: 5 * time.Second, Estimator: estimator, Mode: mode})
 		if err != nil {
 			panic(err)
 		}
@@ -79,6 +86,6 @@ func main() {
 			panic(err)
 		}
 		slices.Sort(latencies)
-		fmt.Printf("estimator=%d packets=%d p50=%s p95=%s go_allocs_total=%d go_allocs_per_packet=%.3f valid_bytes=%d\n", estimator, packets, percentile(latencies, 50), percentile(latencies, 95), after.Mallocs-before.Mallocs, float64(after.Mallocs-before.Mallocs)/float64(packets), valid)
+		fmt.Printf("mode=%s estimator=%d packets=%d p50=%s p95=%s go_allocs_total=%d go_allocs_per_packet=%.3f valid_bytes=%d\n", *modeName, estimator, packets, percentile(latencies, 50), percentile(latencies, 95), after.Mallocs-before.Mallocs, float64(after.Mallocs-before.Mallocs)/float64(packets), valid)
 	}
 }

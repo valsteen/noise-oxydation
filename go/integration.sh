@@ -23,8 +23,10 @@ import (
   "fmt"
   noise "github.com/valsteen/noise-oxydation/go"
 )
-func main() {
-  call, err := noise.New(noise.DefaultConfig())
+func run(mode noise.ProcessingMode) {
+  config := noise.DefaultConfig()
+  config.Mode = mode
+  call, err := noise.New(config)
   if err != nil { panic(err) }
   defer call.Close()
   var packet [noise.PacketBytes]byte
@@ -42,11 +44,14 @@ func main() {
   valid += batch.Count * noise.PacketBytes
   if batch.Count > 0 { valid -= noise.PacketBytes - batch.FinalValid }
   if valid != 64000 { panic(fmt.Sprintf("valid output %d", valid)) }
-  fmt.Printf("external consumer: %d valid bytes\n", valid)
+  fmt.Printf("external consumer mode %d: %d valid bytes\n", mode, valid)
 }
+func main() { run(noise.Conservative); run(noise.ExperimentalLowDelay) }
 EOF
 go test ./...
 go run .
 python3 -c 'from pathlib import Path; Path("input.mulaw").write_bytes(bytes([255])*40000 + bytes((i*31)%256 for i in range(24000)))'
 go run github.com/valsteen/noise-oxydation/go/cmd/replay -input input.mulaw -output output.mulaw
 test "$(wc -c < output.mulaw | tr -d ' ')" = 64000
+go run github.com/valsteen/noise-oxydation/go/cmd/replay -input input.mulaw -output output-experimental.mulaw -mode experimental
+test "$(wc -c < output-experimental.mulaw | tr -d ' ')" = 64000

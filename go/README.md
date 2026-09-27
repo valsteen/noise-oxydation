@@ -43,11 +43,14 @@ Then import `github.com/valsteen/noise-oxydation/go`, with the same `CGO_LDFLAGS
 
 `DefaultConfig()` selects a five-second quiet intro and SPP-MMSE. Set `Config.LearningDuration` and `Config.Estimator` to choose another duration and `Mcra` or `Minimum`. Zero duration and intervals shorter than one 256-sample frame return typed `*noiseoxydation.Error` values; `StatusDSPInit` retains the supplied and minimum sample counts. The call consumes exactly 160 bytes at a time and writes zero to two ordered packets into a caller-owned 320-byte array. Earlier returned packets contain 160 valid bytes; the last has `Batch.FinalValid` valid bytes. Call `Finish` once to drain the stream, then `Reset` before a new stream or `Close` to release it. A finished or closed call returns a typed error.
 
+`Config.Mode` selects `Conservative` (the zero-value default) or `ExperimentalLowDelay` once per call. Both are present in the same Rust archive and Go binary. The experimental mode emits its first complete packet with input packet two instead of three, but changes audio quality and increases frame processing. Keep the conservative default for production until the [mode comparison and risks](../docs/processing-modes.md) fit your call conditions.
+
 `cmd/replay` uses buffered input and output and reuses one input packet and one output batch. It verifies that valid output bytes equal input bytes. With a prepared stream:
 
 ```sh
 cd "$NOISE_ROOT/go"
 go run ./cmd/replay -input /tmp/prepared.mulaw -output /tmp/enhanced.mulaw -estimator mcra
+go run ./cmd/replay -input /tmp/prepared.mulaw -output /tmp/experimental.mulaw -estimator mcra -mode experimental
 ```
 
 For a realistic call, download the [credited OSR 8 kHz mono WAV](https://www.voiptroubleshooter.com/open_speech/american/OSR_us_000_0010_8k.wav) outside Git and verify SHA-256 `a4bf9becd046d7aedb6d05b6e12347a6294a44f74d263089c636fb0a2b1e6561`. Prepare it with the existing Rust replay tool:
@@ -67,6 +70,7 @@ After preparing and hashing the same full-call stream, run the reproducible Go/c
 ```sh
 cd "$NOISE_ROOT/go"
 go run ./cmd/bench -input /tmp/prepared.mulaw
+go run ./cmd/bench -input /tmp/prepared.mulaw -mode experimental
 ```
 
 The benchmark reads the file before timing, warms a full call for each estimator, resets, then times only `Call.Process` per packet. It counts valid bytes including `Finish`, reports nearest-rank p50/p95 over all packets, and measures Go malloc count across the measured call. It excludes file I/O and construction; the malloc count includes Go runtime activity during the call and can vary. It does not measure scheduling delay before the call.
