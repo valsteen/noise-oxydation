@@ -269,7 +269,7 @@ lists every limitation.
 | [docs/go-integration.md](docs/go-integration.md) | The Go package: boundary choice, API, errors, lifecycle, macOS and Linux build and link steps, example |
 | [docs/performance.md](docs/performance.md) | Latency, allocation, memory, throughput, Go binding, Go comparison, stage breakdown, vectorization |
 | [docs/reference-log.md](docs/reference-log.md) | Every difference from the Go reference and the measured parity |
-| [docs/design-principles.md](docs/design-principles.md) | Which engineering principles are carried, adapted or rejected, and why |
+| [docs/design-principles.md](docs/design-principles.md) | The engineering principles this project follows, where they apply, and why |
 | [docs/how-it-works.md](docs/how-it-works.md) | The diagram grammar and how to regenerate the guide |
 | [docs/lint-exceptions.md](docs/lint-exceptions.md) | The audited lint expectations |
 | [AGENTS.md](AGENTS.md) | Contributor and coding-agent rules |

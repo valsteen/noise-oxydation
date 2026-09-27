@@ -21,8 +21,8 @@ Instructions for AI coding agents working in this repository.
   example. Keep it current with `go/` and the C ABI crate.
 - [docs/how-it-works.md](docs/how-it-works.md) owns the diagram grammar and the procedure for changing
   [HOW_IT_WORKS.md](HOW_IT_WORKS.md), which `crates/tools/how-it-works` generates.
-- [docs/design-principles.md](docs/design-principles.md) records which engineering principles of the maintainer's
-  earlier projects this project carries, adapts or rejects. Update it when one is adopted or dropped.
+- [docs/design-principles.md](docs/design-principles.md) lists the engineering principles this project follows and
+  where each applies. Update it when a principle is adopted, changed or dropped.
 
 ## Layout
 
@@ -30,9 +30,9 @@ Workspace members are `crates/*/*`, grouped by role: `crates/core/noise-oxydatio
 `crates/tools/noise-oxydation-eval` and `crates/tools/how-it-works` are development tools that depend on it (or on
 nothing), and `crates/bindings/noise-oxydation-capi` is the C ABI static library for Go. Two Go modules live outside
 the workspace: `go/` (the importable package `noiseox`, which links the C ABI crate, with its header
-`go/noise_oxydation.h` and the example `go/examples/callstream`) and `tools/go-parity`. A new crate needs its own dependency, lifecycle or reuse boundary (see ARCHITECTURE.md), a group folder, and
-an update of the crate-map seed in `crates/tools/how-it-works/src/diagrams/crate_map.rs`; the renderer rejects a seed
-that differs from the manifests.
+`go/noise_oxydation.h` and the example `go/examples/callstream`) and `tools/go-parity`. A new crate needs its own
+dependency, lifecycle or reuse boundary (see ARCHITECTURE.md), a group folder, and an update of the crate-map seed in
+`crates/tools/how-it-works/src/diagrams/crate_map.rs`; the renderer rejects a seed that differs from the manifests.
 
 ## Commands
 
