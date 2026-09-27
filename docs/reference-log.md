@@ -153,7 +153,7 @@ divided by its single-frame squared-window weight `w[1]² ≈ 2.3e−8`, so the 
 amplified by about `1/w[1] ≈ 6600`. Even with unmodified spectra, sample 1 therefore carries an error far larger than
 single-precision rounding, while samples 2 onward reconstruct within one μ-law level. The packet lifecycle
 integration test exempts samples 0 and 1 for this reason
-([crates/noise-oxydation/tests/integration/lifecycle.rs](../crates/noise-oxydation/tests/integration/lifecycle.rs)).
+([crates/core/noise-oxydation/tests/integration/lifecycle.rs](../crates/core/noise-oxydation/tests/integration/lifecycle.rs)).
 
 ### U2. The last valid samples may be amplified after enhancement
 
@@ -171,8 +171,9 @@ Evidence: the `office-5db` noisy input of the [replay](evaluation.md) was cut af
 (SPP-MMSE with tonal suppression) and by `go run . enhance` (the same composition in the reference). For each
 implementation, `noise-oxydation-eval compare` then compared the last 127 samples of the cut call with the same samples
 of the uninterrupted call. The drained tail's peak never exceeded the uninterrupted peak: it was unchanged in 14 cuts
-and 0.38–1.94 dB lower in 6, with identical values for both implementations. On the four full replay scenarios the
-tail peak also stays 6.5–16.0 dB below the peak of the preceding second, identically in both implementations.
+and 0.38–1.94 dB lower in 6, and the two implementations agreed to 0.01 dB in every cut ([P3](#p3-truncated-calls-u2)).
+On the four full replay scenarios the tail peak also stays 6.5–16.0 dB below the peak of the preceding second, with
+the same values to 0.01 dB in both implementations.
 
 Rust keeps its end-of-call behavior. The measurement covers one noise type, SPP-MMSE and whole-packet lengths; the
 reference with arbitrary input lengths was not measured.

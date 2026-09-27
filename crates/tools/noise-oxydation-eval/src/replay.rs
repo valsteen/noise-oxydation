@@ -330,21 +330,34 @@ fn print_scenario(result: &ScenarioResult) {
 
 fn print_recovery(recovery: &[Recovery]) {
     println!("\nspeech during calibration: speech level change (dB) per 1 s window, during run / after run");
+    print_window_header();
+    println!(" {:>10}", "recovery");
+    for entry in recovery {
+        print_window_row(entry, |window| window.speech_level_change);
+        let recovered =
+            entry.recovered_after.map_or_else(|| format!("> {CALIBRATION_WINDOWS} s"), |k| format!("{k} s"));
+        println!(" {recovered:>10}");
+    }
+    println!("\nspeech during calibration: noise attenuation (dB) per 1 s window, during run / after run");
+    print_window_header();
+    println!();
+    for entry in recovery {
+        print_window_row(entry, |window| window.noise_attenuation);
+        println!();
+    }
+}
+
+fn print_window_header() {
     print!("  {:<26}", "window [5+k, 6+k) s, k =");
     for k in 0..CALIBRATION_WINDOWS {
         print!(" {k:>13}");
     }
-    println!(" {:>10}", "recovery");
-    for entry in recovery {
-        print!("  {:<26}", entry.configuration);
-        for (during, after) in &entry.windows {
-            print!(
-                " {:>13}",
-                format!("{}/{}", format_db(during.speech_level_change), format_db(after.speech_level_change))
-            );
-        }
-        let recovered =
-            entry.recovered_after.map_or_else(|| format!("> {CALIBRATION_WINDOWS} s"), |k| format!("{k} s"));
-        println!(" {recovered:>10}");
+}
+
+/// Prints one configuration's during-run / after-run values of one window metric, without ending the line.
+fn print_window_row(entry: &Recovery, metric: impl Fn(&WindowMetrics) -> Option<f64>) {
+    print!("  {:<26}", entry.configuration);
+    for (during, after) in &entry.windows {
+        print!(" {:>13}", format!("{}/{}", format_db(metric(during)), format_db(metric(after))));
     }
 }

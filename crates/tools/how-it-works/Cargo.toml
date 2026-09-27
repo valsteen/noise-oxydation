@@ -1,0 +1,15 @@
+[package]
+name = "how-it-works"
+version = "0.1.0"
+description = "Generates HOW_IT_WORKS.md and its day and night SVG diagrams, and checks that the committed outputs are current"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "how-it-works"
+path = "src/main.rs"
+
+[lints]
+workspace = true

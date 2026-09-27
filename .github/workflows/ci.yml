@@ -1,11 +1,12 @@
 name: CI
 
-# `--workspace --all-features` covers the evaluation crate and the library's `stage-timing` feature. The evidence runs
-# (audio fetch, replay, bench and the Go parity harness) download audio or need Go; they are manual and never run here.
+# `--workspace --all-features` covers the evaluation crate, the guide renderer and the library's `stage-timing` feature.
+# The evidence runs (audio fetch, replay, bench and the Go parity harness) download audio or need Go; they are manual and
+# never run here.
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude]
   pull_request:
 
 permissions:
@@ -56,3 +57,13 @@ jobs:
       - name: Install the toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - run: cargo build --locked --workspace --release
+
+  guide:
+    name: Guide freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Check that HOW_IT_WORKS.md and its diagrams match their seeds
+        run: cargo run --locked -p how-it-works -- --check

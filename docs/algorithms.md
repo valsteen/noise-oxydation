@@ -7,7 +7,14 @@ equations, defaults, and units the code uses. Packet timing, calibration timing,
 **Status.** The complete documented processing path is implemented: μ-law decode, high-pass filter, STFT, noise
 estimation with quiet-intro calibration (SPP-MMSE by default, MCRA or the minimum estimator on request),
 decision-directed SNR, Log-MMSE suppression, tonal transient suppression (enabled by default), ISTFT, and μ-law
-encode. Enhancement quality on real speech has not been measured yet; that is the planned audio evidence.
+encode. Enhancement quality on real speech is measured in [evaluation.md](evaluation.md), and the cost of each stage
+in [performance.md](performance.md#stage-breakdown). [HOW_IT_WORKS.md](../HOW_IT_WORKS.md) draws the flow.
+
+The *Why* paragraphs adapt the explanations of the Go reference's README
+([sghaida/noise-cancelation](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md),
+MIT License, Copyright (c) 2026 Saddam Abu Ghaida; see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)). Where
+the Rust implementation differs from the reference, the equations on this page and
+[reference-log.md](reference-log.md) are authoritative.
 
 ## Signal Flow
 
@@ -31,10 +38,19 @@ The tonal detector never runs on calibration frames, so its first run (which onl
 enhanced frame. It reads the power before suppression, and the tonal gain never feeds back into the decision-directed
 recursion.
 
+*Why two branches.* Background noise and foreground interference are different problems. The noise estimator and
+Log-MMSE suppress what matches the estimated background; the tonal detector suppresses selected strong foreground
+tones that the noise path would keep. Keeping them as separate inputs, multiplied per bin, lets each be measured,
+tuned and disabled on its own. Within a call they run one after the other on the caller's thread (see
+[ARCHITECTURE.md](../ARCHITECTURE.md#per-call-ownership)).
+
 At drain, the buffered remainder is analyzed once as a zero-padded frame (classified like any other frame), the
 synthesis tail finalizes the last 128 overlap samples, and finalized samples beyond the end of the input are dropped.
 
 ## μ-law Codec
+
+*Why.* Telephony carries G.711 because it is simple, low-latency and universally supported, but filtering, spectral
+analysis and statistical suppression need linear samples, so every packet is decoded first and encoded last.
 
 G.711 μ-law with bias 132 (`0x84`) and clip level 32635.
 
@@ -50,6 +66,9 @@ round trip except `0x7F` (negative zero), which re-encodes as `0xFF`.
 
 ## High-Pass Filter
 
+*Why.* Telephone speech carries little energy below about 80 Hz. Removing that band takes out DC offset and
+low-frequency rumble before the FFT, so it cannot inflate the noise estimate.
+
 ```text
 y[n] = x[n] − x[n−1] + r·y[n−1],   r = exp(−2π·fc / 8000)
 ```
@@ -62,6 +81,11 @@ y[n] = x[n] − x[n−1] + r·y[n−1],   r = exp(−2π·fc / 8000)
 `|1 − e^{−jω}| / |1 − r·e^{−jω}|` is −3 dB near 75.3 Hz, −2.74 dB at 80 Hz, and +0.27 dB at 4 kHz. DC is removed.
 
 ## Short-Time Fourier Transform
+
+*Why.* Speech and noise occupy different frequencies at different moments, so noise is easier to suppress per
+frequency bin and per frame than on the waveform. The Hann window tapers each frame's edges, because an FFT treats its
+block as periodic and a hard cut would smear energy across bins. Overlap-add with window-weight normalization rebuilds
+continuous audio at a stable level after the bins have been changed independently.
 
 - **Frames.** 256 samples every 128 samples (50 % overlap); frame `t` covers input samples `[128t, 128t + 256)`.
 - **Window.** Symmetric Hann, `w[n] = 0.5 − 0.5·cos(2πn / 255)`, zero at both ends; used for analysis and synthesis.
@@ -76,6 +100,12 @@ weight is 0) and output sample 1 is divided by `w[1]² ≈ 2.3e−8`, which ampl
 `1/w[1] ≈ 6600`.
 
 ## SPP-MMSE Noise Estimation
+
+*Why.* SPP-MMSE follows changing background noise faster than minimum tracking, because it weighs each observation by
+the probability that speech is present instead of waiting for a new minimum. The fixed 15 dB prior keeps that
+probability stable and independent of the later decision-directed estimate. It cannot tell wanted speech from
+unwanted foreground sound: a bird chirp also yields a speech probability near 1, which is why tonal transient
+suppression exists as a separate stage.
 
 Per bin `k`, with observed power `P` and previous estimate `N` (both replaced by `floor` when below it, NaN, or
 infinite):
@@ -119,10 +149,16 @@ frame initializes the estimator from its own floored power (and is enhanced). Fo
 
 The estimator assumes the intro contains only noise. Speech during calibration is passed through un-enhanced and is
 averaged into the noise estimate, so the estimate is too high when enhancement starts and speech bands are
-over-suppressed until the adaptive update tracks back down. How long that takes has not been measured yet; it is part
-of the planned audio evidence.
+over-suppressed until the adaptive update tracks back down. In the replay's office scene the first second after
+calibration was up to 1.1 dB (SPP-MMSE), 2.1 dB (minimum estimator) and 5.1 dB (MCRA) quieter than in an undisturbed
+call, and matched it within 1 dB after 1 s, 1 s and 3 s
+([evaluation.md](evaluation.md#speech-during-calibration)).
 
 ## MCRA Noise Estimation
+
+*Why.* Pure minimum tracking reacts slowly; MCRA follows the noise quickly while speech is judged absent and freezes
+where it is judged present, so it tracks stationary and slowly changing noise without learning speech. Strong
+foreground interference such as an alarm also counts as speech and is protected.
 
 Minimum-controlled recursive averaging. Per bin, with the observed power `P` floored (values below `floor`, NaN, and
 infinities become `floor`):
@@ -153,6 +189,10 @@ within two windows. When `p` is near 1 the estimate freezes; when it is 0 the es
 
 ## Minimum Noise Estimation
 
+*Why.* Noise often sits near the lower envelope of the observed power. Minimum tracking is simple and deterministic,
+a useful baseline, but it reacts slowly to rising noise and fails where foreground activity covers a band for longer
+than the window.
+
 The simple estimator documented by the reference: the noise is the lower envelope of the smoothed power. Per bin,
 with `P` floored as above:
 
@@ -174,6 +214,10 @@ mean, this estimate is biased low; it tracks rising noise only after `W` frames.
 
 ## Decision-Directed SNR
 
+*Why.* An SNR taken from the current frame alone jumps from frame to frame and makes the suppression gain flutter.
+The decision-directed estimate blends the previous frame's cleaned result with the current evidence; `α = 0.98`
+strongly favors continuity while still letting new speech through.
+
 The suppressor works with an overestimated noise power `N_eff = β · N`, where `β` is the Log-MMSE noise
 overestimation and a negative or non-finite `N` counts as 0. Per bin:
 
@@ -193,6 +237,11 @@ After the gain is applied, `ξ_clean_prev = max(S_hat, 0) / max(N_eff, floor)` i
 | `decision_directed.floor` | 1e−12 | finite, `> 0` |
 
 ## Log-MMSE Suppression
+
+*Why.* Log-MMSE estimates clean speech in the log-spectral domain, which tends to sound smoother and more natural than
+hard spectral subtraction. The noise overestimation `β = 1.25` makes suppression slightly more conservative when the
+estimator underestimates the noise, and the minimum gain keeps bins from being removed entirely, which avoids musical
+noise and holes in the spectrum.
 
 ```text
 v     = max(γ · ξ / (1 + ξ), floor)
@@ -218,6 +267,23 @@ Wiener gain `ξ / (1 + ξ)`; when `ξ = 0` the gain is 0 before clamping, so pur
 A per-bin attenuation of narrow foreground tones (beeps, whistles, chirps) that appear suddenly, move in frequency,
 or persist, while protecting peaks with harmonic support as voiced speech. It is enabled by default
 (`InterferenceConfig::TonalTransient`) and can be disabled (`InterferenceConfig::Disabled`).
+
+*Why.* No single feature is safe on its own: tonality alone matches speech harmonics, flux alone matches consonants,
+and movement alone matches natural pitch changes. The score therefore combines them:
+
+- **Prominence** measures a narrow peak against bins a few positions away, because the Hann window spreads a pure tone
+  into its immediate neighbors.
+- **Positive flux** marks a peak that appeared suddenly, as clicks, door events and bird onsets do, unlike a harmonic
+  that has lasted many frames.
+- **Movement** marks a peak that sweeps in frequency, as chirps and whistles do.
+- **Harmonic protection** spares a peak whose related harmonics are strong, which is how vowels and voiced consonants
+  look.
+- **Persistent tonal evidence** keeps scoring a tone that stays in one bin after its flux and movement have fallen to
+  zero, so an alarm does not escape after its first frame.
+- **Attack and release** let suppression engage quickly and recover slowly, which avoids gain pumping, and **spreading**
+  to neighboring bins follows the window's main lobe instead of cutting a one-bin hole.
+
+The 6 dB limit (`min_gain` 0.5) is deliberately conservative to protect speech.
 
 The detector keeps the previous frame's floored power. Its first run (the first enhanced frame of a call) only stores
 that power and yields unit gains. On each later frame every target gain starts at 1, and each bin `k` from

@@ -3,9 +3,10 @@
 Clippy runs with the `pedantic` group and `-D warnings`. The workspace has no tool-level lint configuration beyond
 enabling `pedantic`, and no `#[allow]` attribute. The only lint expectations are the narrow `#[expect]` attributes
 below, each in the audited numeric-conversion module of its crate:
-[`crates/noise-oxydation/src/convert.rs`](../crates/noise-oxydation/src/convert.rs) in the library and
-[`crates/noise-oxydation-eval/src/convert.rs`](../crates/noise-oxydation-eval/src/convert.rs) in the evaluation crate.
-Every other conversion uses a lossless `From`, a checked `try_from`, or integer arithmetic.
+[`crates/core/noise-oxydation/src/convert.rs`](../crates/core/noise-oxydation/src/convert.rs) in the library and
+[`crates/tools/noise-oxydation-eval/src/convert.rs`](../crates/tools/noise-oxydation-eval/src/convert.rs) in the
+evaluation crate. The guide renderer `crates/tools/how-it-works` has none: its geometry is integer arithmetic. Every
+other conversion uses a lossless `From`, a checked `try_from`, or integer arithmetic.
 
 | Location | Lint | Reason |
 | --- | --- | --- |

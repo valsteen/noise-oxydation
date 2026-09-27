@@ -20,7 +20,7 @@ stage-timing = ["noise-oxydation/stage-timing"]
 
 [dependencies]
 hound = "3.5"
-noise-oxydation = { path = "../noise-oxydation" }
+noise-oxydation = { path = "../../core/noise-oxydation" }
 
 [lints]
 workspace = true

@@ -41,7 +41,8 @@ DEMAND license forbids redistributing derived mixes under other terms. The fetch
 are manual evidence runs; CI never downloads audio.
 
 The optional comparison with the Go reference implementation (see
-[reference-log.md](reference-log.md#measured-parity)) needs Go 1.27:
+[reference-log.md](reference-log.md#measured-parity)) needs Go 1.26.6 or later, the `go` directive of
+`tools/go-parity/go.mod`; the recorded measurements used Go 1.27.1:
 
 ```bash
 (cd tools/go-parity && for scenario in office-5db cafeteria-5db speech-after-calibration speech-during-calibration; do
@@ -226,12 +227,24 @@ Speech level change in dB, during run / after run:
 | `spp-mmse` | −1.34 / −0.25 | −0.64 / −0.55 | −0.82 / −0.77 | −4.15 / −4.09 | −0.24 / −0.24 | −0.09 / −0.09 | −0.36 / −0.36 | −0.89 / −0.89 | −0.04 / −0.04 | −0.28 / −0.28 | 1 s |
 | `mcra` | −5.62 / −0.47 | −3.31 / −1.30 | −2.95 / −1.83 | −7.91 / −7.43 | −0.29 / −0.29 | −0.14 / −0.13 | −0.83 / −0.80 | −1.88 / −1.90 | −0.06 / −0.06 | −0.42 / −0.31 | 3 s |
 | `minimum` | −2.39 / −0.27 | −0.86 / −0.86 | −1.76 / −1.76 | −5.24 / −5.24 | −0.22 / −0.22 | −0.44 / −0.44 | −0.41 / −0.41 | −1.29 / −1.29 | −0.04 / −0.04 | −0.52 / −0.52 | 1 s |
-| `spp-mmse-no-interference` | −1.33 / −0.24 | −0.63 / −0.53 | −0.82 / −0.77 | −4.15 / −4.09 | −0.23 / −0.23 | −0.08 / −0.08 | −0.35 / −0.35 | −0.89 / −0.89 | −0.04 / −0.04 | −0.23 / −0.23 | 1 s |
+| `spp-mmse-no-interference` | −1.33 / −0.24 | −0.63 / −0.53 | −0.82 / −0.77 | −4.15 / −4.09 | −0.23 / −0.23 | −0.08 / −0.08 | −0.34 / −0.34 | −0.89 / −0.89 | −0.04 / −0.04 | −0.23 / −0.23 | 1 s |
 
 Window 3 is low in both runs, so that stretch of speech is attenuated regardless of calibration; only the difference
-between the runs measures recovery. The inflated estimate also raises noise attenuation briefly: in window 1 the
-during run attenuates pauses by 26.0 dB against 22.6 dB with SPP-MMSE, and by 29.7 dB against 22.3 dB with MCRA. From
-window 3 on, the runs agree within 1.1 dB on noise attenuation for every estimator.
+between the runs measures recovery.
+
+The inflated estimate also raises noise attenuation briefly. Noise attenuation in dB, during run / after run, in the
+windows that contain pause frames (windows 0, 2, 6 and 9 contain none):
+
+| *k* (s after calibration) | 1 | 3 | 4 | 5 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `spp-mmse` | 25.98 / 22.57 | 26.88 / 26.87 | 29.95 / 29.95 | 28.79 / 28.79 | 29.80 / 29.80 | 28.75 / 28.75 |
+| `mcra` | 29.66 / 22.31 | 34.93 / 34.88 | 32.08 / 32.12 | 36.17 / 35.12 | 34.99 / 34.98 | 33.64 / 33.63 |
+| `minimum` | 25.24 / 25.19 | 30.46 / 30.46 | 26.09 / 26.09 | 32.29 / 32.29 | 29.08 / 29.08 | 23.86 / 23.86 |
+| `spp-mmse-no-interference` | 25.94 / 22.50 | 26.88 / 26.87 | 29.95 / 29.95 | 28.79 / 28.79 | 29.80 / 29.80 | 28.75 / 28.75 |
+
+In window 1 the during run attenuates pauses by 26.0 dB against 22.6 dB with SPP-MMSE, and by 29.7 dB against 22.3 dB
+with MCRA. From window 3 on, the runs agree within 1.1 dB on noise attenuation for every estimator. The replay prints
+both tables.
 
 In this scene, speech during the intro costs SPP-MMSE and the minimum estimator about one second of reduced speech
 level, at most 2.1 dB. It costs MCRA three seconds, with the first second 5.1 dB quieter than it should be. These

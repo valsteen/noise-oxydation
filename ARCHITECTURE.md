@@ -4,20 +4,25 @@ Noise Oxydation is a Rust library for real-time enhancement of 8 kHz mono teleph
 μ-law packets. One enhancer instance owns one call. This document owns the crate map, dependency direction, per-call
 state ownership, the packet timing contract, and the audio-critical constraints. Algorithm equations, defaults, and
 units live in [docs/algorithms.md](docs/algorithms.md); differences from the Go reference live in
-[docs/reference-log.md](docs/reference-log.md).
+[docs/reference-log.md](docs/reference-log.md). [HOW_IT_WORKS.md](HOW_IT_WORKS.md) is the illustrated visitor guide to
+the same design.
 
 The behavior reference is [sghaida/noise-cancelation at `cfc7520`](https://github.com/sghaida/noise-cancelation/tree/cfc7520a0625da90e4ad4699541a6ffe98e7c637).
 This is an independently written implementation; no Go code is copied.
 
 ## Crate Map And Dependency Direction
 
-Crates are grouped by dependency surface first, then by coherent responsibility. Dependencies point downward only.
+Crates are split by dependency surface first, then by coherent responsibility, and grouped by role in thematic
+folders under `crates/`; the workspace members are `crates/*/*`. Dependencies point downward only.
 
-| Crate | Role | Dependencies | Status |
-| --- | --- | --- | --- |
-| `crates/noise-oxydation` | Library: μ-law codec, high-pass filter, STFT/ISTFT, noise estimators, decision-directed SNR, Log-MMSE, tonal transient suppression, and the per-call `CallEnhancer` | `std`; optional `log` facade | Complete documented processing path implemented: SPP-MMSE, MCRA, and minimum noise estimators, decision-directed SNR, Log-MMSE, tonal transient suppression |
-| `crates/noise-oxydation-eval` | Offline evaluation binary `noise-oxydation-eval`: real-speech replay with quality metrics, byte comparison of μ-law outputs, and packet latency, allocation, memory and throughput benchmarks | `noise-oxydation`, `hound` (WAV I/O) | Implemented: `replay`, `compare`, `bench` ([docs/evaluation.md](docs/evaluation.md), [docs/performance.md](docs/performance.md)) |
-| `crates/how-it-works` | Project-owned renderer for `HOW_IT_WORKS.md` diagrams in day and night palettes, with a freshness check | `std` only | Planned (visual guide) |
+| Crate | Role | Dependencies |
+| --- | --- | --- |
+| `crates/core/noise-oxydation` | Library: μ-law codec, high-pass filter, STFT/ISTFT, noise estimators (SPP-MMSE, MCRA, minimum), decision-directed SNR, Log-MMSE, tonal transient suppression, and the per-call `CallEnhancer` | `std`; optional `log` facade |
+| `crates/tools/noise-oxydation-eval` | Offline evaluation binary `noise-oxydation-eval`: real-speech replay with quality metrics (`replay`), byte comparison of μ-law outputs (`compare`), and packet latency, allocation, memory and throughput benchmarks (`bench`); see [docs/evaluation.md](docs/evaluation.md) and [docs/performance.md](docs/performance.md) | `noise-oxydation`, `hound` (WAV I/O) |
+| `crates/tools/how-it-works` | Binary `how-it-works`: generates [HOW_IT_WORKS.md](HOW_IT_WORKS.md) and its day and night SVG diagrams, and checks with `--check` that the committed outputs are current; see [docs/how-it-works.md](docs/how-it-works.md) | `std` only |
+
+`crates/core` holds the library that applications depend on and `crates/tools` the development tools that depend on
+it. The Go integration item will add a C ABI crate under `crates/bindings/`.
 
 Outside the Cargo workspace, [`tools/go-parity`](tools/go-parity/main.go) is a Go module that drives the pinned Go
 reference as a dependency for parity, timing and reference-concern measurements. It is an evidence tool: nothing in
@@ -44,7 +49,7 @@ and `StreamError`. With the `stage-timing` feature it adds `CallEnhancer::stage_
 | `power` | Power flooring and the `f64` calibration mean shared by the estimators |
 | `decision_directed`, `log_mmse` | A priori SNR estimation; Log-MMSE gain and the exponential integral |
 | `tonal` | Tonal transient detector: per-bin interference gains applied after Log-MMSE |
-| `output_queue` | Bounded FIFO of finalized encoded samples with exact sample accounting |
+| `output_queue` | Fixed ring buffer (FIFO) of finalized encoded samples with exact sample accounting |
 | `stage_timing` | Opt-in per-call stage accumulators; zero-sized without the `stage-timing` feature |
 | `convert` | The audited lossy numeric conversions |
 | `geometry` | The fixed telephony constants |
@@ -52,7 +57,8 @@ and `StreamError`. With the `stage-timing` feature it adds `CallEnhancer::stage_
 Rules:
 
 - The library crate has no dependency on evaluation, rendering, WAV, or CLI crates. Tools depend on the library, never
-  the reverse.
+  the reverse. The guide renderer checks its crate-map diagram against the workspace manifests, so a new crate or
+  dependency edge fails its freshness check until the diagram shows it.
 - Do not add a generic `utils` crate or split the library into per-algorithm crates: every DSP stage shares one
   dependency surface (`std`) and one lifecycle owner (the call), so they stay modules of one crate.
 - A new crate needs an independent dependency, lifecycle, or reuse boundary (for example a C ABI for Go integration).
@@ -105,6 +111,21 @@ optional `log` facade keeps its own process-wide logger registration; the librar
 - There is no cross-thread boundary inside the library, so it uses no atomics or locks. If a future feature adds one
   (for example publishing statistics to a monitoring thread), values that must be observed together are published as
   one coherent snapshot, never as independently updated atomics.
+
+### Buffers And Synchronization
+
+The buffers and the absence of synchronization are deliberate, measured choices
+([docs/design-principles.md](docs/design-principles.md#ring-buffers-and-atomics) records the decision):
+
+- The encoded output waits in `OutputQueue`, a fixed 512-byte ring buffer: frames append finished bytes at the tail,
+  packets leave from the head, and nothing is shifted.
+- The analysis input buffer and the synthesis overlap and weight buffers are plain fixed arrays that shift by one hop
+  (128 samples) with `copy_within` after each frame. The FFT needs each frame contiguous anyway, and the measured
+  analysis and synthesis stages cost about 1.26 µs per frame each, of which the FFT is about 1.2 µs
+  ([docs/performance.md](docs/performance.md#stage-breakdown)), so a ring buffer would add wrap-around indexing for no
+  measurable gain.
+- Parallelism across calls comes from ownership, not synchronization: no call waits on another, and there is nothing
+  to lock or to update atomically.
 
 ## Packet Timing Contract
 
@@ -171,11 +192,11 @@ the concurrency claim by running independent calls with mixed configurations on 
 output with sequential runs. `noise-oxydation-eval bench` repeats the allocation check in release builds on real audio
 and measures latency against the 20 ms cadence ([docs/performance.md](docs/performance.md)).
 
-The library crate forbids `unsafe` code (`#![forbid(unsafe_code)]`), and so does the evaluation crate's library. The
-workspace contains exactly two `unsafe` sites, both allocation-counting `GlobalAlloc` implementations that delegate
-every call to `std::alloc::System` and count per thread: the library's `allocation` test harness and the
-`noise-oxydation-eval` binary (`crates/noise-oxydation-eval/src/main.rs`). No vectorization or other optimization may
-add `unsafe` to the library; the vectorization investigation adopted no explicit SIMD.
+The library crate forbids `unsafe` code (`#![forbid(unsafe_code)]`), and so do the evaluation crate's library and the
+guide renderer. The workspace contains exactly two `unsafe` sites, both allocation-counting `GlobalAlloc`
+implementations that delegate every call to `std::alloc::System` and count per thread: the library's `allocation` test
+harness and the `noise-oxydation-eval` binary (`crates/tools/noise-oxydation-eval/src/main.rs`). No vectorization or
+other optimization may add `unsafe` to the library; the vectorization investigation adopted no explicit SIMD.
 
 ## Observability
 
@@ -200,17 +221,26 @@ add `unsafe` to the library; the vectorization investigation adopted no explicit
 
 Clippy pedantic runs with warnings as errors. Lossy numeric conversions that cannot be expressed with a lossless std
 conversion (f64 → f32 narrowing, float → PCM16 quantization) are confined to one audited conversion module per crate:
-`crates/noise-oxydation/src/convert.rs` in the library and `crates/noise-oxydation-eval/src/convert.rs` in the
-evaluation crate. Every lint expectation is narrow, carries a `reason`, and is listed in
-[docs/lint-exceptions.md](docs/lint-exceptions.md).
+`crates/core/noise-oxydation/src/convert.rs` in the library and `crates/tools/noise-oxydation-eval/src/convert.rs` in
+the evaluation crate. The guide renderer computes its geometry in integers and needs none. Every lint expectation is
+narrow, carries a `reason`, and is listed in [docs/lint-exceptions.md](docs/lint-exceptions.md).
 
 ## Limitations
 
-- Fixed 8 kHz / 256 / 128 geometry: other sample rates or FFT sizes are out of scope.
-- Classical single-channel enhancement: it cannot separate a second talker, and strong foreground sounds that do not
-  match the tonal-transient pattern are treated as foreground.
+- Fixed 8 kHz / 256 / 128 geometry: other sample rates or FFT sizes are out of scope. At 8 kHz nothing above the
+  4 kHz Nyquist frequency exists, and upsampling cannot restore it, so evaluate with genuine telephone bandwidth when
+  telephony is the target.
+- Classical single-channel enhancement. The noise estimators answer whether a sound matches the estimated background,
+  not whether it is wanted speech: a strong foreground sound such as a bird chirp looks like speech (speech probability
+  near 1, Log-MMSE gain near 1) and passes. Tonal transient suppression helps only with narrow tones and is not a
+  source separator.
+- A second talker cannot be removed: both voices have valid speech structure, and telling them apart needs target
+  speaker extraction, source separation or several microphones.
 - Tonal transient suppression analyzes only bins at or above `min_frequency_bin` (2 kHz by default) and attenuates by
   at most `min_gain` (−6.02 dB by default): tones below that bin pass as foreground, and louder tones are reduced
   rather than removed.
 - Calibration assumes a quiet intro; speech during calibration degrades early enhancement for the measured 1–3 s
   described above.
+
+The first three limitations adapt the "Current Limitations" section of the Go reference's README (MIT License,
+Copyright (c) 2026 Saddam Abu Ghaida; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
