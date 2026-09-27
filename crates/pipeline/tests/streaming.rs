@@ -287,3 +287,56 @@ fn selected_estimator_and_tonal_history_reset_for_new_call() {
         assert_eq!(first, second, "{noise_estimator:?}");
     }
 }
+
+#[cfg(feature = "logging")]
+#[test]
+fn explicit_status_writes_do_not_change_audio_or_lifecycle() {
+    for noise_estimator in [
+        NoiseEstimator::SppMmse,
+        NoiseEstimator::Mcra,
+        NoiseEstimator::Minimum,
+    ] {
+        let config = Config {
+            noise_estimator,
+            ..Config::default()
+        };
+        let mut observed = Pipeline::new(config).unwrap();
+        let mut plain = Pipeline::new(config).unwrap();
+        let mut status = String::new();
+        observed.write_status(&mut status).unwrap();
+        assert_eq!(
+            status,
+            "phase=active input_samples=0 output_samples=0 pending_samples=0"
+        );
+        for _ in 0..12 {
+            let packet = [0x80; PACKET_SAMPLES];
+            let mut with_status = Vec::new();
+            let mut without_status = Vec::new();
+            take(&observed.process_packet(&packet).unwrap(), &mut with_status);
+            take(&plain.process_packet(&packet).unwrap(), &mut without_status);
+            assert_eq!(with_status, without_status);
+            status.clear();
+            observed.write_status(&mut status).unwrap();
+        }
+        assert!(status.contains("input_samples=1920"));
+        let mut with_status = Vec::new();
+        let mut without_status = Vec::new();
+        take(&observed.finish().unwrap(), &mut with_status);
+        take(&plain.finish().unwrap(), &mut without_status);
+        assert_eq!(with_status, without_status);
+        status.clear();
+        observed.write_status(&mut status).unwrap();
+        assert!(status.starts_with("phase=finished input_samples=1920 output_samples=1920"));
+        assert!(matches!(
+            observed.finish(),
+            Err(PipelineError::AlreadyFinished)
+        ));
+        observed.reset();
+        status.clear();
+        observed.write_status(&mut status).unwrap();
+        assert_eq!(
+            status,
+            "phase=active input_samples=0 output_samples=0 pending_samples=0"
+        );
+    }
+}

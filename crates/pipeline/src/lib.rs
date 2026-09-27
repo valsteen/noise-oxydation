@@ -203,6 +203,23 @@ impl Pipeline {
         self.finished = false;
     }
 
+    /// Write a read-only call snapshot to a caller-owned sink. Invoke this away
+    /// from the audio processing thread; processing and finish never call it.
+    ///
+    /// # Errors
+    /// Returns the sink's formatting error.
+    #[cfg(feature = "logging")]
+    pub fn write_status(&self, sink: &mut impl fmt::Write) -> fmt::Result {
+        write!(
+            sink,
+            "phase={} input_samples={} output_samples={} pending_samples={}",
+            if self.finished { "finished" } else { "active" },
+            self.input_samples,
+            self.output_samples,
+            self.pending_len
+        )
+    }
+
     #[allow(clippy::cast_possible_truncation)] // Clamp and rounding bound PCM to i16.
     fn append_output(&mut self, samples: &[f32; HOP], valid: usize, batch: &mut PacketBatch) {
         for &sample in &samples[..valid] {

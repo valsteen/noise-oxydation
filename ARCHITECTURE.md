@@ -27,8 +27,30 @@ A 160-sample input can complete zero, one, or two 128-sample DSP hops. `process_
 
 The output sample sequence has the same valid length as the input sequence after `finish`. Tests cover short streams, packet timing, exact hop alignment, ordered sample counts, finish-once, and reset for all estimators. The 50-by-129 power history and tonal prior-frame arrays are owned by each `Enhancer`; no call shares them. An allocation-counting test observes zero allocations after construction through `process_packet` and `finish` for each selection. The path has no locks or atomics in production; callers should keep each instance on one processing owner. Transferring an instance between threads is the caller's policy.
 
-## Evidence and remaining stages
+## Diagnostics and offline evidence
 
-Stable Rust builds, tests, and Clippy with pedantic warnings denied run in CI; nightly rustfmt checks the shared 2024 style. Numerical tests check minimum eviction, MCRA probability, coefficient and window-turnover updates, tonal features, gain smoothing and spread, and the final spectral gain product. Synthetic packet tests check finite output, intro bypass, stationary-noise attenuation, sustained voice and tonal interference, and full reset. The release packet benchmark measures local scalar timing for all three estimators; it is not a target-platform latency guarantee. The pinned [Go reference observations](docs/reference-observations.md) record a 68.6% component-level Go sustained-voice result, the absence of a shipped top-level Go MCRA pipeline, and unresolved formula and flush behavior questions.
+The opt-in `logging` feature adds `Pipeline::write_status(&mut impl fmt::Write)`. The caller owns the sink and invokes this read-only status write away from the audio thread. It reports active/finished phase and input, output and pending sample counters. No sink is retained, and neither `process_packet` nor `finish` formats, allocates for diagnostics, calls a callback or acquires a lock. The counting allocator runs with default and all features for every estimator. Both feature modes preserve the same packet and reset tests. CI runs locked build, tests and pedantic Clippy for default and all features, plus nightly rustfmt.
 
-Later checkpoints must add real-audio evidence, opt-in logging and performance tracing, scalar versus SIMD measurements, and final light/dark visual explanations. Current synthetic evidence does not establish full Go numerical parity or real-audio quality.
+The opt-in `performance-analysis` feature compiles two offline examples without adding processing-path instrumentation or a dependency. Run `cargo run --release --locked -p noise-oxydation-pipeline --features performance-analysis --example packet_bench` for warmed, identical-input scalar timing. The benchmark warms one 2,000-packet call, resets, measures packets 0–249 for learning, excludes 250–299 around the cutoff, and measures 300–1999 for suppression. It times `finish` separately and computes p50/p95 by nearest rank on sorted packet durations. This run used VincentacStudio, macOS arm64, Rust 1.98.1, release:
+
+| Estimator | Learning p50 / p95 (µs) | Suppression p50 / p95 (µs) | Finish (µs) |
+| --- | ---: | ---: | ---: |
+| SPP-MMSE | 6.12 / 11.58 | 17.42 / 34.92 | 19.00 |
+| MCRA | 6.12 / 11.58 | 19.00 / 38.79 | 20.75 |
+| Minimum | 6.21 / 11.62 | 18.50 / 37.75 | 20.92 |
+
+These local measurements are not a target-platform guarantee; no per-stage need for `minitrace` was demonstrated.
+
+The replay example accepts a caller-supplied 8 kHz mono PCM WAV. Run `cargo run --release --locked -p noise-oxydation-pipeline --features performance-analysis --example wav_replay -- /private/tmp/OSR_us_000_0010_8k.wav /private/tmp/OSR_us_000_0010_8k-prepared.mulaw`. The representative source is [OSR_us_000_0010_8k.wav](https://www.voiptroubleshooter.com/open_speech/american/OSR_us_000_0010_8k.wav), credited to **Open Speech Repository**. Its verified SHA-256 is `a4bf9becd046d7aedb6d05b6e12347a6294a44f74d263089c636fb0a2b1e6561`, with `N = 268985` samples. The deterministic prepared μ-law stream hashes to `ac50c854bbc0500ee478376a1bc74e339d53257170974685403a1674430a082f`. Neither the source clip nor generated audio is committed.
+
+Noise-only calibration occupies `[0,40000)`, post-calibration noise `[40000,48000)`, and noisy recorded speech follows. Each estimator received 317,120 input samples and returned exactly 317,120 valid samples. RMS output/input uses only decoded μ-law noise in `[40800,47200)`. Pearson correlation and gain-sensitive projection `Σ(output × clean)/Σ(clean²)` use `[48800,48000+N-800)` against the μ-law-quantized clean WAV.
+
+| Estimator | Noise RMS ratio | Speech correlation | Speech projection gain |
+| --- | ---: | ---: | ---: |
+| SPP-MMSE | 0.1040 | 0.8902 | 0.5910 |
+| MCRA | 0.1070 | 0.9634 | 0.8383 |
+| Minimum | 0.1563 | 0.9586 | 0.8303 |
+
+The [replay evidence](docs/real-audio-evidence.md) gives the exact seed, preparation, formulas, hash commands and limitations.
+
+Numerical and synthetic tests still cover estimator and tonal arithmetic, intro bypass, finite output, stationary-noise attenuation, voice with tonal interference, and reset. The pinned [Go reference observations](docs/reference-observations.md) record a 68.6% component-level Go sustained-voice result, the absence of a shipped top-level Go MCRA pipeline, and unresolved formula and flush behavior questions. The real-speech replay measures this Rust path only; it does not prove broad speech quality or Go numerical parity. The continuing item retains scalar-versus-SIMD investigation and the final light/dark guide.

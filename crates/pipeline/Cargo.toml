@@ -9,5 +9,17 @@ rust-version.workspace = true
 noise-oxydation-codec = { path = "../codec" }
 noise-oxydation-dsp = { path = "../dsp" }
 
+[features]
+logging = []
+performance-analysis = []
+
+[[example]]
+name = "packet_bench"
+required-features = ["performance-analysis"]
+
+[[example]]
+name = "wav_replay"
+required-features = ["performance-analysis"]
+
 [lints]
 workspace = true

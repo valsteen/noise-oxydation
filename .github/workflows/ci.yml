@@ -14,6 +14,9 @@ jobs:
       - run: cargo build --locked --workspace --all-targets
       - run: cargo test --locked --workspace --all-targets
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo build --locked --workspace --all-targets --all-features
+      - run: cargo test --locked --workspace --all-targets --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
   format:
     runs-on: ubuntu-latest
     steps:
