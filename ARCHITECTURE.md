@@ -51,7 +51,8 @@ silently replaced by defaults.
 `CallEnhancer` is the composition root for one call. It exclusively owns every piece of temporal state for that call:
 high-pass filter memory, the analysis input buffer, FFT scratch and twiddles, noise-estimator state, decision-directed
 SNR history, Log-MMSE and interference state, the synthesis overlap buffers, the calibration clock, and the encoded
-output queue. Nothing is shared between calls: no global mutable state, no shared caches, no locks.
+output queue. Nothing is shared between calls: the library owns no global mutable state, no shared caches, and no locks.
+(The optional `log` facade keeps its own process-wide logger registration; the library only reads it at construction.)
 
 - Processing within a call is strictly sequential. Each packet runs the stages in order on the caller's thread.
 - Independent calls run in parallel by giving each call its own `CallEnhancer` on whatever thread or task drives that
@@ -71,14 +72,16 @@ delay of two packets (40 ms):
   samples of input packet *n − 2*.
 - `drain` ends the call. It processes the buffered tail with one zero-padded analysis frame plus the synthesis tail and
   returns exactly the withheld packets (`min(packets_in, 2)`), so the total output sample count equals the total input
-  sample count. Samples beyond the input end (analysis padding) are never emitted.
+  sample count. Samples beyond the input end (analysis padding) are never emitted. Draining a call that received no
+  packet processes no frame and returns zero packets.
 - After `drain`, further packets are rejected with a typed lifecycle error until `reset`.
 - `reset` starts a new call on the same instance. It discards any buffered input and withheld output, restores the
   calibration clock, and reuses all storage.
 
 Why two packets: frame *t* covers input samples `[128t, 128t + 256)` and finalizes output samples `[128t, 128t + 128)`
-once overlap-add with frame *t − 1* is complete. After *p* packets, `128·⌊(160p − 128)/128⌋ ≥ 160p − 255` samples are
-final, which is always at least `160(p − 2)`. One packet of delay is not enough because `160p − 255 < 160(p − 1)`.
+once overlap-add with frame *t − 1* is complete. After *p ≥ 2* packets, `128·⌊(160p − 128)/128⌋ ≥ 160p − 255` samples
+are final, which is always at least `160(p − 2)`. One packet of delay is not enough: after two packets only 128 samples
+are final, fewer than one packet.
 
 Timing mirrors the reference analysis grid exactly (see [docs/reference-log.md](docs/reference-log.md) for the Go
 behavior and every deliberate difference).
@@ -95,6 +98,9 @@ duration is 5 s and is configurable (zero disables calibration).
   un-enhanced (high-pass filtered only).
 - At the first non-calibration frame the estimator switches to adaptive tracking, initialized from the calibration
   mean.
+- The call phase is `Calibrating` from construction until the first non-calibration frame has been processed, then
+  `Enhancing`. When the duration is shorter than one frame (256 samples), no calibration frame exists and the phase
+  starts as `Enhancing`; the estimator then initializes from the first frame.
 - Speech during calibration is passed through un-enhanced, and it is learned as noise. The inflated noise estimate
   over-suppresses speech bands right after calibration until the adaptive estimator tracks back down. The recovery time
   depends on the estimator and is measured in the evaluation evidence rather than assumed.
@@ -108,15 +114,20 @@ duration is 5 s and is configurable (zero disables calibration).
 - bounded, preallocated storage sized by the fixed geometry (input buffer, overlap buffers, output queue);
 - deterministic output for identical input and configuration.
 
-Construction (`CallEnhancer::new`) is the only place that may allocate. Integration tests enforce the allocation claim
-with a counting global allocator, the lifecycle claim with sample-exact accounting, and the concurrency claim by
-running independent calls on parallel threads and comparing their output with sequential runs.
+Construction (`CallEnhancer::new`) is the only place that may allocate or log. Integration tests enforce the allocation
+claim with a per-thread counting global allocator, the lifecycle claim with sample-exact accounting, and the concurrency
+claim by running independent calls on parallel threads and comparing their output with sequential runs.
+
+The library crate forbids `unsafe` code (`#![forbid(unsafe_code)]`). The only `unsafe` in the workspace is the
+allocation-counting `GlobalAlloc` test harness, which delegates to `std::alloc::System`.
 
 ## Observability
 
-- Logging uses the `log` facade behind the default `log` Cargo feature. Log records are emitted only outside the packet
-  path (construction, drain, reset). Disable at compile time with `default-features = false` or at runtime by
-  installing no logger or filtering the level.
+- Logging uses the `log` facade behind the default `log` Cargo feature. The library emits records only from
+  construction (`CallEnhancer::new`), which is initialization rather than the packet path; `process_packet`, `drain`,
+  and `reset` never log and report lifecycle facts through their return values and `phase()`. Disable at compile time
+  with `default-features = false` or at runtime by installing no logger or filtering the level. Applications and tools
+  log their own call-level events.
 - Opt-in performance analysis is planned as a Cargo feature that accumulates per-stage timings inside the call without
   allocation. Heavier tracing (for example `minitrace`) is adopted only if measurements show the per-stage accounting
   is insufficient.

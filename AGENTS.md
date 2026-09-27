@@ -29,6 +29,8 @@ because `rustfmt.toml` uses unstable options.
 
 - Keep `process_packet`, `drain`, and `reset` free of allocation, locks, blocking calls, I/O, and logging. Size storage
   at construction. The allocation-counting integration test must keep passing.
+- The library crate forbids `unsafe` code. The only permitted `unsafe` is the test-only allocation-counting
+  `GlobalAlloc` harness that delegates to `std::alloc::System`; it counts per thread so parallel tests stay independent.
 - Treat compiler and Clippy (pedantic) warnings as work to fix. Do not add `#[allow]`/`#[expect]` or tool-level lint
   exceptions except a narrow `#[expect(..., reason = "...")]` in the audited numeric-conversion module, recorded in
   `docs/lint-exceptions.md`. If another exception looks necessary, stop and explain the tradeoff.
