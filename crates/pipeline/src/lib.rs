@@ -1,8 +1,8 @@
 //! One pipeline instance owns one 8 kHz mono G.711 μ-law call.
 
 use noise_oxydation_codec::{decode, encode};
-pub use noise_oxydation_dsp::NoiseEstimator;
-use noise_oxydation_dsp::{DspError, Enhancer, HOP};
+pub use noise_oxydation_dsp::{DspError, NoiseEstimator};
+use noise_oxydation_dsp::{Enhancer, HOP};
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;

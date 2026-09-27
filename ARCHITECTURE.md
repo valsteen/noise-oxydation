@@ -4,11 +4,12 @@
 
 One `noise-oxydation-pipeline::Pipeline` owns one 8 kHz mono call. The caller provides fixed 160-byte G.711 μ-law packets and receives owned, fixed-capacity packet batches. Independent calls use independent instances; there is no microphone, Twilio connection, UI, worker pool, or shared mutable DSP state.
 
-The Rust 2024 workspace has three crates. `codec` performs μ-law conversion without dependencies. `dsp` owns the high-pass filter, frame analyzer, FFT, three selectable noise estimators, Log-MMSE and tonal gains, and synthesis without depending on codec or pipeline. `pipeline` depends on both and owns public estimator selection, call lifecycle, packet conversion, and output buffering. The fixed 256-point FFT is implemented in `dsp`; this path needs no runtime dependency or FFT scratch allocation.
+The Rust 2024 workspace has four crates. `codec` performs μ-law conversion without dependencies. `dsp` owns the high-pass filter, frame analyzer, FFT, three selectable noise estimators, Log-MMSE and tonal gains, and synthesis without depending on codec or pipeline. `pipeline` depends on both and owns public estimator selection, call lifecycle, packet conversion, and output buffering. `ffi` depends on pipeline and exports a C ABI with one opaque handle per call. The Go module owns the cgo wrapper and a per-call mutex, so `Close` cannot free a handle during `Process`. The fixed 256-point FFT is implemented in `dsp`; this path needs no runtime dependency or FFT scratch allocation.
 
 ```text
-telephony caller → pipeline → codec
-                       └────→ dsp
+Go caller → Go Call → FFI → pipeline → codec
+                                      └────→ dsp
+Rust caller ─────────────────→ pipeline
 ```
 
 ## Audio flow and timing
@@ -26,6 +27,8 @@ During learning, frame output takes the original decoded PCM rather than the fil
 A 160-sample input can complete zero, one, or two 128-sample DSP hops. `process_packet` returns only whole 160-sample output packets, so it may return none. The first full packet is observed on input packet three. An input packet contributes at most 256 output samples, and fewer than 160 may already be pending: at most two whole packets can be returned during processing. At `finish`, the DSP can lag by less than 256 samples and the output remainder is less than 160. Their sum is a multiple of 160 because every input packet contains 160 samples and valid output length equals input length; the sum is below 416, so it is at most 320. The stack-owned batch has two slots and reports the valid count of its last packet. The current final packet is whole. A second finish fails. `reset` clears the high-pass, analyzer, selected estimator's baseline and fixed history, tonal history, synthesis, packet remainder, and finished state while retaining the configuration.
 
 The output sample sequence has the same valid length as the input sequence after `finish`. Tests cover short streams, packet timing, exact hop alignment, ordered sample counts, finish-once, and reset for all estimators. The 50-by-129 power history and tonal prior-frame arrays are owned by each `Enhancer`; no call shares them. An allocation-counting test observes zero allocations after construction through `process_packet` and `finish` for each selection. The path has no locks or atomics in production; callers should keep each instance on one processing owner. Transferring an instance between threads is the caller's policy.
+
+The C ABI validates null pointers, exact 160-byte input, and 320-byte output capacity before advancing a call. It reports typed statuses, ordered packet count, and final valid count without retaining input or output pointers; Rust panics are caught at the exported boundary. Raw C callers must provide valid non-null storage and serialize one handle's use. The Go package hides C types, owns one handle per `Call`, and serializes its methods with a mutex, including `Close`. Each Go call retains its own pipeline and estimator state. The Rust FFI process and finish paths remain allocation-free and without blocking synchronization after construction; the Go boundary does use a mutex and Go/cgo scheduling has no hard real-time guarantee. See [Go integration](go/README.md) for build, lifecycle, example, and measured packet latency.
 
 ## Diagnostics and offline evidence
 

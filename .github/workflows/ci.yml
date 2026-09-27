@@ -19,6 +19,18 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: rustc --edition=2024 -D warnings tools/render_how_it_works.rs -o "$RUNNER_TEMP/render_how_it_works"
       - run: '"$RUNNER_TEMP/render_how_it_works" --check'
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+      - run: cmp crates/ffi/include/noise_oxydation.h go/abi.h
+      - run: cargo build --release --locked -p noise-oxydation-ffi
+      - run: sh go/integration.sh
+      - run: cd go && CGO_ENABLED=1 CGO_LDFLAGS="$(pwd)/../target/release/libnoise_oxydation_ffi.a -ldl -lpthread -lm" go test ./...
   format:
     runs-on: ubuntu-latest
     steps:

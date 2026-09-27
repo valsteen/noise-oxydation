@@ -1,33 +1,39 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="665" viewBox="0 0 960 665" role="img" aria-labelledby="title description">
 <title id="title">Crate ownership and dependency direction</title>
-<desc id="description">Each caller owns a Pipeline for one call. Pipeline depends on codec for G.711 conversion and on DSP for fixed-frame enhancement. Independent calls can run concurrently; no lower crate depends on pipeline.</desc>
+<desc id="description">A Go Call owns an FFI handle to one Pipeline. FFI depends on pipeline, which depends on codec for G.711 conversion and DSP for fixed-frame enhancement. Independent calls may run concurrently.</desc>
 <defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 H 0 V 24" fill="none" stroke="#e8e1d5" stroke-width="1"/></pattern><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#697487"/></marker><marker id="bypass-arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#81796f"/></marker></defs>
-<rect width="960" height="470" fill="#fffdf7"/><rect width="960" height="470" fill="url(#grid)"/><rect x="1" y="1" width="958" height="468" fill="none" stroke="#cec7b9" stroke-width="2"/>
+<rect width="960" height="665" fill="#fffdf7"/><rect width="960" height="665" fill="url(#grid)"/><rect x="1" y="1" width="958" height="663" fill="none" stroke="#cec7b9" stroke-width="2"/>
 <rect x="55" y="25" width="330" height="115" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="55" y="25" width="6" height="115" fill="#394a62"/>
-<rect x="55" y="165" width="330" height="190" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="55" y="165" width="6" height="190" fill="#394a62"/>
-<rect x="650" y="90" width="255" height="125" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="650" y="90" width="6" height="125" fill="#81796f"/>
-<rect x="650" y="280" width="255" height="155" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="650" y="280" width="6" height="155" fill="#394a62"/>
+<rect x="55" y="165" width="330" height="115" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="55" y="165" width="6" height="115" fill="#81796f"/>
+<rect x="55" y="305" width="330" height="170" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="55" y="305" width="6" height="170" fill="#394a62"/>
+<rect x="650" y="300" width="255" height="125" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="650" y="300" width="6" height="125" fill="#81796f"/>
+<rect x="650" y="490" width="255" height="155" fill="#ffffff" stroke="#aaa397" stroke-width="1.5"/><rect x="650" y="490" width="6" height="155" fill="#394a62"/>
 <path d="M 220 140 V 165" fill="none" stroke="#697487" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<path d="M 385 215 H 520 V 153 H 650" fill="none" stroke="#697487" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<path d="M 385 300 H 560 V 360 H 650" fill="none" stroke="#697487" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<text x="77" y="51" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">CALL OWNER</text>
-<text x="77" y="80" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">One Pipeline per call</text>
+<path d="M 220 280 V 305" fill="none" stroke="#697487" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 385 350 H 520 V 363 H 650" fill="none" stroke="#697487" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 385 425 H 560 V 565 H 650" fill="none" stroke="#697487" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="77" y="51" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">GO CALL OWNER</text>
+<text x="77" y="80" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">One Go Call per stream</text>
 <text x="77" y="106" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Separate calls may run concurrently</text>
-<text x="77" y="124" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">caller schedules each instance</text>
-<text x="77" y="191" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">PIPELINE CRATE</text>
-<text x="77" y="220" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Packet and call lifecycle</text>
-<text x="77" y="246" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Config · process_packet</text>
-<text x="77" y="266" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">finish once · reset</text>
-<text x="77" y="286" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">owns pending output</text>
-<text x="77" y="339" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">noise-oxydation-pipeline</text>
-<text x="672" y="116" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">CODEC CRATE</text>
-<text x="672" y="145" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">G.711 μ-law conversion</text>
-<text x="672" y="171" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">decode and encode</text>
-<text x="672" y="199" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">noise-oxydation-codec</text>
-<text x="672" y="306" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">DSP CRATE</text>
-<text x="672" y="335" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Fixed-frame enhancement</text>
-<text x="672" y="361" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">high-pass · STFT / ISTFT</text>
-<text x="672" y="381" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">estimators · gains · overlap</text>
-<text x="672" y="419" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">noise-oxydation-dsp</text>
-<rect x="55" y="436" width="445" height="21" fill="#fffdf7"/><text x="60" y="452" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="12" font-weight="700" letter-spacing="0.8">One call = one state owner; crate code is reusable</text>
+<text x="77" y="124" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">Go package hides cgo</text>
+<text x="77" y="191" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">FFI CRATE</text>
+<text x="77" y="220" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Opaque per-call handle</text>
+<text x="77" y="246" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">C ABI · fixed output batch</text>
+<text x="77" y="264" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">noise-oxydation-ffi</text>
+<text x="77" y="331" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">PIPELINE CRATE</text>
+<text x="77" y="360" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Packet and call lifecycle</text>
+<text x="77" y="386" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Config · process_packet</text>
+<text x="77" y="406" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">finish once · reset</text>
+<text x="77" y="426" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">owns pending output</text>
+<text x="77" y="459" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">noise-oxydation-pipeline</text>
+<text x="672" y="326" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">CODEC CRATE</text>
+<text x="672" y="355" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">G.711 μ-law conversion</text>
+<text x="672" y="381" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">decode and encode</text>
+<text x="672" y="409" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">noise-oxydation-codec</text>
+<text x="672" y="516" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">DSP CRATE</text>
+<text x="672" y="545" fill="#292721" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Fixed-frame enhancement</text>
+<text x="672" y="571" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">high-pass · STFT / ISTFT</text>
+<text x="672" y="591" fill="#625d53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">estimators · gains · overlap</text>
+<text x="672" y="629" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11">noise-oxydation-dsp</text>
+<rect x="55" y="631" width="445" height="21" fill="#fffdf7"/><text x="60" y="647" fill="#6d665b" font-family="ui-monospace, SFMono-Regular, monospace" font-size="12" font-weight="700" letter-spacing="0.8">One call = one state owner; crate code is reusable</text>
 </svg>
