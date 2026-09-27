@@ -1,9 +1,14 @@
-//! Keeps the crate-map seed honest: the workspace manifests, the Go parity harness's `go.mod` and the crate-map
-//! diagram must all agree with [`crate_map::WORKSPACE_CRATES`]. Generation and `--check` stop on any drift.
+//! Keeps the crate-map seed honest: the workspace manifests, the two Go modules and the crate-map diagram must all
+//! agree with [`crate_map::WORKSPACE_CRATES`] and the Go constants of the seed. Generation and `--check` stop on any
+//! drift.
 //!
 //! The manifest reader understands the plain forms this workspace uses: `[package]` `name`, and `[dependencies]` entries
-//! written as `name = "version"` or `name = { ... }` inline tables. Other dependency forms are rejected rather than
-//! silently skipped, so a new form cannot hide a dependency from the diagram.
+//! written as `name = "version"` or as single-line `name = { key = value, ... }` inline tables, whose keys it reads
+//! exactly (`path` makes a workspace dependency, `optional = true` an optional one). Other dependency forms are rejected
+//! rather than silently skipped, so a new form cannot hide a dependency from the diagram.
+//!
+//! On the Go side it reads the `module` line of `go/go.mod`, the `require` lines of `tools/go-parity/go.mod`, and the
+//! `#cgo LDFLAGS` lines of the Go package, which must link the static library of [`crate_map::GO_PACKAGE_LINKS`].
 
 use std::{
     error::Error,
@@ -13,8 +18,8 @@ use std::{
 
 use crate::{
     diagrams::crate_map::{
-        self, DependencySource, GO_PARITY_CARD, GO_REFERENCE_CARD, GO_REFERENCE_MODULE, GO_REFERENCE_VERSION,
-        WorkspaceCrate,
+        self, DependencySource, GO_PACKAGE_CARD, GO_PACKAGE_LINKS, GO_PACKAGE_MODULE, GO_PARITY_CARD,
+        GO_REFERENCE_CARD, GO_REFERENCE_MODULE, GO_REFERENCE_VERSION, WorkspaceCrate,
     },
     model::{Diagram, Stroke},
 };
@@ -22,6 +27,8 @@ use crate::{
 /// The workspace member pattern the crate map assumes: thematic groups under `crates/`.
 const MEMBERS_LINE: &str = r#"members = ["crates/*/*"]"#;
 const GO_MANIFEST: &str = "tools/go-parity/go.mod";
+/// Directory of the Go package, relative to the repository root.
+const GO_PACKAGE_DIRECTORY: &str = "go";
 
 /// A crate as its Cargo manifest declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +65,10 @@ pub(crate) enum Drift {
     ConnectorUnexpected { from: &'static str, to: &'static str },
     /// `tools/go-parity/go.mod` does not require the Go reference version the diagram shows.
     GoReferenceDiffers { manifest: Option<String> },
+    /// `go/go.mod` does not declare the module path of the seed.
+    GoPackageModuleDiffers { manifest: Option<String> },
+    /// No `#cgo LDFLAGS` line of the Go package links the static library of the crate the diagram shows it linking.
+    GoPackageLinkMissing { library: String },
 }
 
 impl fmt::Display for Drift {
@@ -90,6 +101,15 @@ impl fmt::Display for Drift {
                 ),
                 None => write!(formatter, "{GO_MANIFEST} does not require {GO_REFERENCE_MODULE}"),
             },
+            Self::GoPackageModuleDiffers { manifest } => match manifest {
+                Some(module) => {
+                    write!(formatter, "{GO_PACKAGE_DIRECTORY}/go.mod declares {module}, not {GO_PACKAGE_MODULE}")
+                }
+                None => write!(formatter, "{GO_PACKAGE_DIRECTORY}/go.mod declares no module"),
+            },
+            Self::GoPackageLinkMissing { library } => {
+                write!(formatter, "no #cgo LDFLAGS line in {GO_PACKAGE_DIRECTORY}/ links -l{library}")
+            }
         }
     }
 }
@@ -153,6 +173,15 @@ pub(crate) fn check_crate_map(root: &Path) -> Result<(), ManifestError> {
     if go_reference.as_deref() != Some(GO_REFERENCE_VERSION) {
         drifts.push(Drift::GoReferenceDiffers { manifest: go_reference });
     }
+    let go_package = root.join(GO_PACKAGE_DIRECTORY);
+    let go_module = module_path(&read(&go_package.join("go.mod"))?);
+    if go_module.as_deref() != Some(GO_PACKAGE_MODULE) {
+        drifts.push(Drift::GoPackageModuleDiffers { manifest: go_module });
+    }
+    let library = static_library_name(GO_PACKAGE_LINKS);
+    if !links_library(&read_go_sources(&go_package)?, &library) {
+        drifts.push(Drift::GoPackageLinkMissing { library });
+    }
     if drifts.is_empty() { Ok(()) } else { Err(ManifestError::Drift(drifts)) }
 }
 
@@ -195,19 +224,57 @@ pub(crate) fn parse_manifest(path: &Path, text: &str, directory: String) -> Resu
         if table == "package" && key == "name" {
             package = Some(value.trim_matches('"').to_owned());
         } else if table == "dependencies" {
-            if value.contains("workspace") {
-                return Err(unsupported(line));
-            }
-            let source = if value.contains("path") {
-                DependencySource::Workspace
-            } else {
-                DependencySource::Registry { optional: value.contains("optional = true") }
-            };
+            let source = dependency_source(value).ok_or_else(|| unsupported(line))?;
             dependencies.push(ManifestDependency { name: key.to_owned(), source });
         }
     }
     let package = package.ok_or_else(|| ManifestError::MissingPackageName { path: path.to_path_buf() })?;
     Ok(ManifestCrate { package, directory, dependencies })
+}
+
+/// The source of a dependency written as `"version"` or as a single-line inline table, or `None` for any other form
+/// (including `workspace = true`, which this reader does not resolve).
+fn dependency_source(value: &str) -> Option<DependencySource> {
+    if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+        return Some(DependencySource::Registry { optional: false });
+    }
+    let body = value.strip_prefix('{')?.strip_suffix('}')?;
+    let mut workspace = false;
+    let mut optional = false;
+    for entry in top_level_entries(body)? {
+        let (key, entry_value) = entry.split_once('=')?;
+        match key.trim() {
+            "workspace" => return None,
+            "path" => workspace = true,
+            "optional" => optional = entry_value.trim() == "true",
+            _ => {}
+        }
+    }
+    Some(if workspace { DependencySource::Workspace } else { DependencySource::Registry { optional } })
+}
+
+/// The comma-separated entries of an inline table body, splitting only outside strings and arrays. `None` when a string
+/// or an array is left open.
+fn top_level_entries(body: &str) -> Option<Vec<&str>> {
+    let mut entries = Vec::new();
+    let (mut depth, mut in_string, mut start) = (0_usize, false, 0);
+    for (index, character) in body.char_indices() {
+        match character {
+            '"' => in_string = !in_string,
+            '[' if !in_string => depth += 1,
+            ']' if !in_string => depth = depth.checked_sub(1)?,
+            ',' if !in_string && depth == 0 => {
+                entries.push(&body[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if in_string || depth != 0 {
+        return None;
+    }
+    entries.push(&body[start..]);
+    Some(entries.into_iter().filter(|entry| !entry.trim().is_empty()).collect())
 }
 
 /// Every difference between the seed and the manifests.
@@ -249,7 +316,8 @@ pub(crate) fn manifest_drift(seed: &[WorkspaceCrate], manifests: &[ManifestCrate
 ///
 /// Each crate and each dependency needs a card keyed by its name, and each dependency a connector from the crate's card
 /// to the dependency's card, dashed exactly when the dependency is optional. No other connector may join two of those
-/// cards. The Go harness and the Go reference module are joined by one solid connector.
+/// cards. The Go harness and the Go reference module are joined by one solid connector, and so are the Go package and the
+/// crate whose static library it links.
 pub(crate) fn diagram_drift(seed: &[WorkspaceCrate], diagram: &Diagram) -> Vec<Drift> {
     let mut expected = Vec::new();
     for entry in seed {
@@ -259,6 +327,7 @@ pub(crate) fn diagram_drift(seed: &[WorkspaceCrate], diagram: &Diagram) -> Vec<D
         }
     }
     expected.push((GO_PARITY_CARD, GO_REFERENCE_CARD, Stroke::Solid));
+    expected.push((GO_PACKAGE_CARD, GO_PACKAGE_LINKS, Stroke::Solid));
     let mut keys: Vec<&'static str> = expected.iter().flat_map(|&(from, to, _)| [from, to]).collect();
     keys.extend(seed.iter().map(|entry| entry.package));
     keys.sort_unstable();
@@ -295,6 +364,47 @@ pub(crate) fn required_version(go_manifest: &str, module: &str) -> Option<String
         let name = if first == "require" { words.next()? } else { first };
         if name == module { words.next().map(str::to_owned) } else { None }
     })
+}
+
+/// The path of the `module` line of a `go.mod`.
+pub(crate) fn module_path(go_manifest: &str) -> Option<String> {
+    go_manifest.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        (words.next()? == "module").then(|| words.next().map(str::to_owned)).flatten()
+    })
+}
+
+/// The file name stem Cargo gives the library of `package` by default: dashes become underscores.
+fn static_library_name(package: &str) -> String {
+    package.replace('-', "_")
+}
+
+/// Whether a `#cgo` `LDFLAGS` directive in `sources` passes `-l<library>`.
+pub(crate) fn links_library(sources: &[String], library: &str) -> bool {
+    let flag = format!("-l{library}");
+    sources.iter().flat_map(|source| source.lines()).any(|line| {
+        let Some(directive) = line.trim().strip_prefix("#cgo ") else { return false };
+        let Some((condition, flags)) = directive.split_once(':') else { return false };
+        condition.split_whitespace().last() == Some("LDFLAGS") && flags.split_whitespace().any(|word| word == flag)
+    })
+}
+
+/// The non-test Go sources directly in `directory`.
+fn read_go_sources(directory: &Path) -> Result<Vec<String>, ManifestError> {
+    let entries =
+        fs::read_dir(directory).map_err(|source| ManifestError::Io { path: directory.to_path_buf(), source })?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|source| ManifestError::Io { path: directory.to_path_buf(), source })?.path();
+        // Go itself only compiles lowercase `.go` files and treats `_test` files as tests.
+        let is_go = path.extension().is_some_and(|extension| extension == "go");
+        let is_test = path.file_stem().is_some_and(|stem| stem.to_string_lossy().ends_with("_test"));
+        if is_go && !is_test {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths.iter().map(|path| read(path)).collect()
 }
 
 fn describe(name: &str, source: DependencySource) -> String {

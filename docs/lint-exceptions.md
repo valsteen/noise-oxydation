@@ -1,11 +1,14 @@
 # Lint Exceptions
 
 Clippy runs with the `pedantic` group and `-D warnings`. The workspace has no tool-level lint configuration beyond
-enabling `pedantic`, and no `#[allow]` attribute. The only lint expectations are the narrow `#[expect]` attributes
-below, each in the audited numeric-conversion module of its crate:
+enabling `pedantic`, and no `#[allow]` attribute. The C ABI crate `crates/bindings/noise-oxydation-capi` makes two
+lints stricter rather than looser: its library and integration tests deny `unsafe_op_in_unsafe_fn` and
+`clippy::undocumented_unsafe_blocks`, so every `unsafe` block states its safety argument. The only lint expectations
+are the narrow `#[expect]` attributes below, each in the audited numeric-conversion module of its crate:
 [`crates/core/noise-oxydation/src/convert.rs`](../crates/core/noise-oxydation/src/convert.rs) in the library and
 [`crates/tools/noise-oxydation-eval/src/convert.rs`](../crates/tools/noise-oxydation-eval/src/convert.rs) in the
-evaluation crate. The guide renderer `crates/tools/how-it-works` has none: its geometry is integer arithmetic. Every
+evaluation crate. The guide renderer `crates/tools/how-it-works` has none: its geometry is integer arithmetic. The C
+ABI crate has none either: it copies values between identical C and Rust types. Every
 other conversion uses a lossless `From`, a checked `try_from`, or integer arithmetic.
 
 | Location | Lint | Reason |

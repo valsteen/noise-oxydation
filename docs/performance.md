@@ -1,8 +1,8 @@
 # Performance
 
 This page records measured packet latency, heap activity, per-call memory and concurrent-call throughput of the
-library, a comparison with the Go reference on the same machine and audio, the per-stage cost, the vectorization
-investigation and the `minitrace` decision. Every number comes from release builds of the scalar code as it stands
+library, the same measurements through the Go binding, a comparison with the Go reference on the same machine and
+audio, the per-stage cost, the vectorization investigation and the `minitrace` decision. Every number comes from release builds of the scalar code as it stands
 in this repository.
 
 In short, on an Apple M1 Ultra:
@@ -12,6 +12,9 @@ In short, on an Apple M1 Ultra:
 - After construction, `process_packet`, `drain` and `reset` never touch the heap. A call holds 18–44 KB of state.
 - 100 concurrent calls of 120 s each finish in 0.54–0.72 s of wall time, a real-time factor of about 17 000–22 000.
   The Go reference composition needs 2.2–2.3 s for the same work on the same machine and audio.
+- Called from Go through the `noiseox` package, a packet costs the same within measurement spread: one Go-to-Rust
+  crossing costs about 28 ns, the call loop performs no heap allocation, and 100 concurrent calls in goroutines reach
+  real-time factors of 17 000–20 000 ([Go Binding](#go-binding)).
 - Log-MMSE, specifically the exponential integral evaluated per bin in `f64`, takes about two thirds of the packet
   time. No vectorization candidate gave a measured benefit while keeping the output byte-identical, so none was
   adopted, and `minitrace` was not adopted either.
@@ -140,6 +143,98 @@ office input) took 1.95–1.98 s on this machine. It reported 2867 MiB of cumula
 allocations, 15.0–16.3 MiB of peak live heap and 39 CPU-seconds (about 20 cores busy). Its README figure of 1.291 s
 comes from an Apple M5 Pro and is not comparable with this machine.
 
+## Go Binding
+
+The Go package `noiseox` in `go/` calls the library through the C ABI crate `noise-oxydation-capi`
+([go-integration.md](go-integration.md)). These measurements answer what a Go call-handling service pays on top of the
+Rust packet cost: per-packet latency seen from Go, heap allocations of the Go call loop, the cost of one cgo crossing,
+and the throughput of many calls in parallel goroutines.
+
+### Setup And Commands
+
+Same machine and input as above (`audio/out/office-5db/noisy.ul`, 2647 packets), Go 1.27.1 `darwin/arm64` with
+`GOMAXPROCS` 20, the static library built in release mode by Rust 1.98.1, and the call-stream example compiled once.
+The example is the production pattern of [go-integration.md](go-integration.md#the-call-stream-example): it reads each
+packet from a buffered reader into one reused array, calls `ProcessPacket`, and writes emitted packets to a buffered
+writer.
+
+```bash
+cargo build --locked --release -p noise-oxydation-capi
+cd go
+go build -o /tmp/callstream ./examples/callstream
+for calls in 1 20 100; do
+  /tmp/callstream -in ../audio/out/office-5db/noisy.ul -estimator spp-mmse -passes 20 -parallel "$calls"
+done                                     # likewise -estimator mcra, -estimator minimum, -interference=false
+go test -run '^$' -bench . -count 5 ./...
+go test -race ./...                      # includes the testing.AllocsPerRun checks
+```
+
+- **Latency.** One Go call, 20 passes over the input with `Reset` between them (52 940 packets), `time.Now` read
+  before and after each `ProcessPacket`, like `bench` does around `process_packet`. The Rust library itself is the
+  same code measured above.
+- **Allocations.** `runtime.MemStats` `Mallocs` and `TotalAlloc`, read after a `runtime.GC()` before the first pass
+  and after the last drain, with no other goroutine running; the parallel runs happen afterwards. The package tests
+  also assert `testing.AllocsPerRun` = 0 for `ProcessPacket` and for a process–drain–phase–reset cycle, with and
+  without the race detector, and the benchmarks report allocations per operation.
+- **Crossing cost.** `BenchmarkPhase` calls `Call.Phase`, which crosses into Rust, checks its pointers, enters the
+  panic guard, reads one field and returns: an upper bound of the fixed cost every Go call into the library pays.
+- **Throughput.** After the measured loop, the example creates N `Call`s in N goroutines, releases them together, and
+  lets each stream 120 s of audio (6000 packets, looping the input) and drain. Wall time runs from the release to the
+  last goroutine's end; every call must produce the same output digest.
+
+### Results
+
+`ProcessPacket` latency from Go in µs, ranges over four runs per configuration; the last column is the mean of
+`process_packet` measured by `noise-oxydation-eval bench` in the same session:
+
+| Configuration | min | p50 | p99 | p99.9 | max | mean | Rust mean, same session |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `spp-mmse` | 0.42 | 15.12–15.21 | 43.08–44.00 | 82.33–85.71 | 128.04–141.46 | 16.89–17.03 | 17.10 |
+| `mcra` | 0.42 | 13.08–13.21 | 40.75–41.92 | 79.79–85.08 | 133.71–287.92 | 14.62–14.77 | 14.62 |
+| `minimum` | 0.42 | 14.88–14.92 | 45.58–46.17 | 79.88–88.58 | 138.21–189.25 | 16.91–17.00 | 16.97 |
+| `spp-mmse-no-interference` | 0.42 | 13.96–14.04 | 40.33–42.04 | 81.54–84.75 | 150.54–174.00 | 15.61–15.72 | 15.86 |
+
+The Go-side means lie within 0.25 µs of the Rust means, above or below them, which is inside the run-to-run spread of
+either tool: the crossing cost does not show at this resolution. It is measured directly instead: `BenchmarkPhase`
+takes 28.0–28.3 ns per call (five runs), 0.17 % of a mean packet, and `BenchmarkProcessPacket` (synthetic input,
+default configuration) 17.22–17.37 µs per packet. The slowest packet of any run took 0.29 ms, 1.4 % of the 20 ms
+cadence.
+
+Heap allocations: the call loop allocated nothing (0 allocations, 0 bytes) in every run of every configuration, over
+52 940 `ProcessPacket` calls, 20 drains and 19 resets each. `testing.AllocsPerRun` reports 0 for `ProcessPacket` and
+for the lifecycle cycle, also under `-race`, and both benchmarks report 0 B/op and 0 allocs/op. Without the
+`#cgo noescape` directives the allocation test fails, because the arguments passed to C then escape to the heap.
+
+Concurrent calls of 120 s each, one goroutine and one `Call` per call:
+
+| Configuration | 1 call | 20 calls | 100 calls | 100 calls, real-time factor | Rust `bench`, 100 calls, same session |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `spp-mmse` | 0.106 s | 0.138 s | 0.699–0.702 s | 17 100–17 200× | 0.714 s |
+| `mcra` | 0.092 s | 0.125 s | 0.594–0.602 s | 19 900–20 200× | 0.600 s |
+| `minimum` | 0.108 s | 0.143 s | 0.687–0.701 s | 17 100–17 500× | 0.852 s |
+| `spp-mmse-no-interference` | 0.098 s | 0.132 s | 0.622–0.631 s | 19 000–19 300× | 0.741 s |
+
+Goroutines scale like the Rust threads of `bench`: 100 calls on 20 cores take about five times as long as 20 calls.
+The Go runtime schedules them on `GOMAXPROCS` (20) threads; a goroutine inside `ProcessPacket` keeps its thread for the
+duration of the Rust call.
+
+The Go output is the Rust output: on the office input, `-out` of the example is byte-identical to
+`audio/out/office-5db/enhanced-spp-mmse.ul` written by the replay, and the package tests compare three configurations
+with digests that the C ABI crate's tests check against the Rust API.
+
+### Limits Of The Go Measurements
+
+- One machine, macOS on Apple silicon. The Linux CI job checks correctness, allocation and packet counts, not timing.
+- `time.Now` on this machine advances in steps of about 42 ns, visible in the 0.42 µs minimum; each sample includes
+  two clock reads.
+- The loop does nothing but read, process and write packets through buffered files; a service adds network, codec and
+  scheduling work around it. With `-pace` the example waits for a 20 ms ticker, and the process-wide allocation
+  count then also includes the Go runtime's own background allocations while it waits, so paced runs report the count
+  without failing on it.
+- The rest of a Go service can still allocate and trigger garbage collection; the enhancer adds no garbage of its own,
+  and a goroutine inside `ProcessPacket` does not hold up a collection because the runtime treats a cgo call like a
+  system call.
+
 ## Stage Breakdown
 
 Built with `--features stage-timing`, one thread, 20 passes (µs per packet; shares of the summed stage time):
@@ -217,3 +312,4 @@ receive to send), which per-stage accumulation cannot show.
   integral converges at different rates.
 - Latency is measured around `process_packet` on a thread that does nothing else, without network or codec work.
 - The Go comparison uses a harness composed like the reference benchmark, not a production Go service.
+- The Go binding has its own limits, listed in [Limits Of The Go Measurements](#limits-of-the-go-measurements).

@@ -26,6 +26,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "noise-oxydation-capi"
+version = "0.1.0"
+dependencies = [
+ "noise-oxydation",
+]
+
+[[package]]
 name = "noise-oxydation-eval"
 version = "0.1.0"
 dependencies = [

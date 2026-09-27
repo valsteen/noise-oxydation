@@ -17,20 +17,20 @@ Below, *Bitwig* and *MIDI* abbreviate the two projects.
 
 | Principle | Decision | Where it applies |
 | --- | --- | --- |
-| [Crates split by dependency surface, grouped by theme](#crate-grouping) | Adapted | `crates/core`, `crates/tools`; ARCHITECTURE.md crate map |
-| [Dependencies point down only](#dependency-direction) | Carried | Tools depend on the library; checked by the crate-map drift check |
+| [Crates split by dependency surface, grouped by theme](#crate-grouping) | Adapted | `crates/core`, `crates/tools`, `crates/bindings`; ARCHITECTURE.md crate map |
+| [Dependencies point down only](#dependency-direction) | Carried | Tools and the C ABI crate depend on the library; checked by the crate-map drift check |
 | [Ownership clarity and exact dependencies](#ownership-and-exact-dependencies) | Carried | `CallEnhancer` as composition root; stage and renderer signatures |
 | [Naming by role and lifecycle](#naming) | Carried | Module and type names; current-design wording in docs |
 | [Types over sentinels, no false reuse](#types-over-sentinels) | Carried | `PacketOutcome`, `CallPhase`, configuration enums, renderer types |
 | [Name-only wrappers](#name-only-wrappers) | Carried | All crates |
 | [No speculative abstraction](#no-speculative-abstraction) | Carried | Static dispatch over the implemented estimators |
-| [Error taxonomy and provenance at boundaries](#errors) | Adapted | Flat typed error enums with `source()` |
+| [Error taxonomy and provenance at boundaries](#errors) | Adapted | Flat typed error enums with `source()`; structured C ABI detail and typed Go errors at the FFI boundary |
 | [Production surface versus tests](#production-surface-versus-tests) | Carried | AGENTS.md hard rule |
-| [Test layout](#test-layout) | Carried | `tests/unit/<module>.rs`, `tests/integration/` |
+| [Test layout](#test-layout) | Carried | `tests/unit/<module>.rs`, `tests/integration/`; Go tests beside the package |
 | [No tautological tests](#tautological-tests) | Carried | AGENTS.md hard rule |
 | [Shared state and synchronization](#shared-state-and-synchronization) | Carried | No shared state today; coherent snapshots if ever needed |
 | [Ring buffers and atomics](#ring-buffers-and-atomics) | Adapted | Ring buffer for output only; no atomics or locks |
-| [Realtime constraints](#realtime-constraints) | Carried | `process_packet`, `drain`, `reset` |
+| [Realtime constraints](#realtime-constraints) | Carried | `process_packet`, `drain`, `reset`, and their C ABI and Go wrappers |
 | [Logging and performance analysis](#logging-and-performance-analysis) | Adapted | `log` feature; `stage-timing` feature |
 | [Lint and format policy](#lint-and-format-policy) | Carried, exceptions adapted | `rust-toolchain.toml`, `rustfmt.toml`, workspace lints |
 | [No macros](#no-macros) | Carried | All crates |
@@ -50,8 +50,8 @@ responsibility". *MIDI* groups crates in thematic folders (`crates/entrypoints/`
 
 **Adapted.** Crates are split by dependency surface and grouped by role: `crates/core/noise-oxydation` (the library,
 `std` plus an optional `log`), `crates/tools/noise-oxydation-eval` (adds `hound` and a CLI) and
-`crates/tools/how-it-works` (the guide renderer, `std` only). The Go integration item will add
-`crates/bindings/noise-oxydation-capi`. There are no `support` or `foundation` groups because no shared infrastructure
+`crates/tools/how-it-works` (the guide renderer, `std` only) and `crates/bindings/noise-oxydation-capi` (the C ABI
+static library for Go, the only crate whose dependency surface is a foreign ABI and `unsafe` code). There are no `support` or `foundation` groups because no shared infrastructure
 crate exists. The library stays one crate: every DSP stage has the same dependency surface and the same lifecycle
 owner (the call), so per-algorithm crates would only add boundaries (see
 [ARCHITECTURE.md](../ARCHITECTURE.md#crate-map-and-dependency-direction)).
@@ -60,9 +60,11 @@ owner (the call), so per-algorithm crates would only add boundaries (see
 
 *MIDI* `rust/agent-guides/architecture.md`: product crates depend down into foundation crates, never back up.
 
-**Carried.** Tools depend on the library; the library depends on no tool, WAV, CLI or rendering crate. The renderer's
-crate-map drift check fails generation when the manifests gain an edge the diagram does not show, and
-`cargo tree -p noise-oxydation -e normal` lists only `log`.
+**Carried.** Tools and the C ABI crate depend on the library; the library depends on no tool, binding, WAV, CLI or
+rendering crate. The Go package in `go/` sits above the C ABI crate and links it. The renderer's crate-map drift check
+fails generation when the manifests gain an edge the diagram does not show, or when the Go package's module path or
+link flags stop matching the diagram. `cargo tree -p noise-oxydation -e normal` lists only `log`, and
+`cargo tree -p noise-oxydation-capi -e normal` only the library, without `log`.
 
 ### Ownership and exact dependencies
 
@@ -124,6 +126,13 @@ the library enforces itself. Consumers map errors at their boundary and keep the
 `std::error::Error::source`, with the file path attached to I/O and WAV failures. The library rejects invalid
 configuration instead of replacing it with defaults, so the provider, not the caller, guarantees a valid call.
 
+At the FFI boundary provenance is carried as data, because a Rust error value cannot cross it. The C ABI crate maps
+each `ConfigError` variant to a status plus a `nox_error` detail in caller-owned storage that holds the variant's kind
+and every datum (fields, values, constraint and bounds, count bounds, duration), without allocation. The Go package
+maps that detail to a `*ConfigError` with the same data, which unwraps to the category sentinel `ErrInvalidConfig`, and
+its message is formatted by the Rust `Display` implementation through `nox_error_message`, so the text has one source.
+Lifecycle statuses map to Go sentinels, and a Rust panic becomes a status instead of unwinding into Go.
+
 ## Tests
 
 ### Production surface versus tests
@@ -139,7 +148,8 @@ evaluation binary, where `bench` needs them.
 *Bitwig* `client/agent-guides/rust.md` and *MIDI* `rust/agent-guides/tooling.md`: no inline `mod tests { ... }`; unit
 tests in `tests/unit/<module>.rs` wired with a `#[path]` hook; integration tests under `tests/integration/`.
 
-**Carried** in all three crates, including the renderer.
+**Carried** in all four crates, including the renderer and the C ABI crate. The Go package keeps its tests beside the
+code in `go/`, as Go requires.
 
 ### Tautological tests
 
@@ -178,7 +188,7 @@ also stated a preference for ring buffers and non-blocking synchronization where
   256-sample buffer by 128 samples with `copy_within`, and the synthesizer shifts its overlap and weight buffers the
   same way. The [stage breakdown](performance.md#stage-breakdown) measures the whole analysis stage (window, FFT,
   power spectrum and the shift) at 1.57 µs per packet and the synthesis stage (inverse FFT, overlap-add and the
-  shifts) at 1.57 µs, against 16.7 µs for the whole packet. A packet completes 1.25 frames on average, so each stage
+  shifts) at 1.57 µs, against 16.80 µs for all stages together (16.89 µs measured around `process_packet`). A packet completes 1.25 frames on average, so each stage
   costs about 1.26 µs per frame, of which the FFT alone is about 1.2 µs: the shifts and the element-wise loops share
   the few hundredths of a microsecond that remain. A ring buffer would not remove the copy either: the FFT needs the
   frame contiguous and windowed, so a circular analysis buffer would still be gathered into scratch, and it would add
@@ -201,7 +211,9 @@ which side owns a thread. *Bitwig* `client/agent-guides/architecture.md`: realti
 **Carried.** `process_packet`, `drain` and `reset` never allocate, lock, block, log or perform I/O; storage is sized at
 construction; the allocation integration test and `noise-oxydation-eval bench` check it. The packet path is synchronous
 and runs on the caller's thread, which ARCHITECTURE.md states; callers may drive calls from async tasks, but the
-library never awaits.
+library never awaits. The same holds through the Go package: its packet methods pass the caller's fixed-size arrays to
+the C ABI, which writes into them, and `testing.AllocsPerRun` checks zero Go allocations, also under the race
+detector.
 
 ### Logging and performance analysis
 
@@ -223,8 +235,10 @@ exceptions without explicit human confirmation.
 **Carried**, with two adaptations. The toolchain is pinned in `rust-toolchain.toml` (1.98.1), and the nightly rustfmt is
 pinned to a date (`nightly-2026-09-25`) so that the unstable `rustfmt.toml` options format identically in CI and
 locally. The only lint exceptions are narrow `#[expect(..., reason = "...")]` attributes confined to the audited
-numeric-conversion modules and listed in [lint-exceptions.md](lint-exceptions.md). Every Cargo command runs with
-`--locked`.
+numeric-conversion modules and listed in [lint-exceptions.md](lint-exceptions.md). The C ABI crate adds stricter
+lints instead: it denies `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks`, so every `unsafe` block
+carries its safety argument. Every Cargo command runs with `--locked`; the Go package is checked with `gofmt` and
+`go vet`.
 
 ### No macros
 
@@ -272,7 +286,7 @@ route through a task-oriented `docs/README.md` index with hubs and leaves.
 **Carried, except the hub structure.** ARCHITECTURE.md owns contracts, docs/algorithms.md equations,
 docs/reference-log.md differences from the reference, and docs/evaluation.md and docs/performance.md the evidence;
 README.md and HOW_IT_WORKS.md summarize and link. Work-tracking state and downloaded audio stay out of Git.
-**Rejected:** the index-hub-leaf structure. README.md links all ten documents directly from one table, so an index
+**Rejected:** the index-hub-leaf structure. README.md links all eleven documents directly from one table, so an index
 would add a layer without a routing problem to solve. Revisit if the docs grow beyond a directly linkable set.
 
 ## Rejected App-Specific Rules
@@ -280,7 +294,7 @@ would add a layer without a routing problem to solve. Revisit if the docs grow b
 | Rule | Source | Why it does not apply |
 | --- | --- | --- |
 | Tauri shell, IPC events and channels, TypeScript and web rules | *Bitwig* `client/agent-guides/architecture.md`, `tooling.md` | No desktop app or user interface |
-| Protocol ownership, request correlation, stream dispatchers, messaging patterns | *Bitwig* `docs/engineering-style.md`, `client/agent-guides/architecture.md` | No wire protocol: the packet API is an in-process call, and the Go integration will be a C ABI |
+| Protocol ownership, request correlation, stream dispatchers, messaging patterns | *Bitwig* `docs/engineering-style.md`, `client/agent-guides/architecture.md` | No wire protocol: the packet API is an in-process call, also from Go through the C ABI |
 | Bitwig host projections, domain handles, private API binding workflow | *Bitwig* `AGENTS.md`, `docs/engineering-style.md` | No Bitwig host |
 | Plugin, desktop and WASM modes, the nice-plug fork policy, the GUI phase contract | *MIDI* `rust/architecture.md`, `rust/agent-guides/architecture.md` | No plugin host or GUI; the realtime analogue, the 20 ms packet cadence, is covered under [Realtime constraints](#realtime-constraints) |
 | A `scripts/dev.sh` command helper | *Bitwig* `client/agent-guides/tooling.md`; *MIDI* `rust/agent-guides/tooling.md` | The Cargo commands are few and listed verbatim in AGENTS.md and README.md; a wrapper would be a second entry point to keep current |

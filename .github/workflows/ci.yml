@@ -1,8 +1,9 @@
 name: CI
 
-# `--workspace --all-features` covers the evaluation crate, the guide renderer and the library's `stage-timing` feature.
-# The evidence runs (audio fetch, replay, bench and the Go parity harness) download audio or need Go; they are manual and
-# never run here.
+# `--workspace --all-features` covers the evaluation crate, the guide renderer, the C ABI crate and the library's
+# `stage-timing` feature. The Go integration job links the C ABI static library into the Go package in `go/`, its
+# example and a separate consumer module. The evidence runs (audio fetch, replay, bench and the Go parity harness)
+# download audio; they are manual and never run here.
 
 on:
   push:
@@ -67,3 +68,89 @@ jobs:
         run: rustup toolchain install
       - name: Check that HOW_IT_WORKS.md and its diagrams match their seeds
         run: cargo run --locked -p how-it-works -- --check
+
+  go:
+    name: Go integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+          cache: false
+      # A package-only build, so that feature unification with the workspace cannot re-enable `log` in the library.
+      - name: Build the C ABI static library
+        run: cargo build --locked --release -p noise-oxydation-capi
+      - name: gofmt
+        working-directory: go
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+      - name: go vet
+        working-directory: go
+        run: go vet ./...
+      - name: go test -race
+        working-directory: go
+        run: go test -race ./...
+      - name: Call-stream example on synthetic input (checks packet counts and loop allocations)
+        working-directory: go
+        run: go run ./examples/callstream -synthetic 3000 -passes 2 -parallel 4 -parallel-seconds 10
+      - name: Separate consumer module importing the package
+        env:
+          CGO_ENABLED: "1"
+          CGO_LDFLAGS: -L${{ github.workspace }}/target/release
+        run: |
+          consumer="$RUNNER_TEMP/consumer"
+          mkdir -p "$consumer"
+          cd "$consumer"
+          go mod init example.com/consumer
+          go mod edit -require=github.com/valsteen/noise-oxydation-claude/go@v0.0.0 \
+            -replace=github.com/valsteen/noise-oxydation-claude/go="$GITHUB_WORKSPACE/go"
+          cat > main.go <<'GO'
+          package main
+
+          import (
+          	"fmt"
+          	"os"
+
+          	noiseox "github.com/valsteen/noise-oxydation-claude/go"
+          )
+
+          func main() {
+          	call, err := noiseox.New(noiseox.DefaultConfig())
+          	if err != nil {
+          		fmt.Fprintln(os.Stderr, err)
+          		os.Exit(1)
+          	}
+          	defer call.Close()
+          	var in, out [noiseox.PacketSize]byte
+          	for i := range in {
+          		in[i] = 0xFF
+          	}
+          	packets := 0
+          	for range 100 {
+          		emitted, err := call.ProcessPacket(&in, &out)
+          		if err != nil {
+          			fmt.Fprintln(os.Stderr, err)
+          			os.Exit(1)
+          		}
+          		if emitted {
+          			packets++
+          		}
+          	}
+          	var tail [noiseox.DelayPackets][noiseox.PacketSize]byte
+          	n, err := call.Drain(&tail)
+          	if err != nil || packets+n != 100 {
+          		fmt.Fprintln(os.Stderr, "unexpected output:", packets+n, err)
+          		os.Exit(1)
+          	}
+          	fmt.Println("consumer: 100 packets in, 100 packets out")
+          }
+          GO
+          go run .

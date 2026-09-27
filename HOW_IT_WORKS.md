@@ -15,13 +15,19 @@ contracts and [docs/algorithms.md](docs/algorithms.md) every equation and defaul
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works/crate-map-dark.svg">
-  <img src="docs/assets/how-it-works/crate-map.svg" alt="Crate map: the tools noise-oxydation-eval and how-it-works above the core library noise-oxydation; the evaluation tool depends on the library and on hound, the library only on the optional log facade, the renderer on nothing; beside the workspace, go-parity depends on the pinned Go reference module">
+  <img src="docs/assets/how-it-works/crate-map.svg" alt="Crate map: on top the Go modules, where the noiseox Go package links the noise-oxydation-capi static library through cgo and go-parity depends on the pinned Go reference module; below them the tools and bindings noise-oxydation-capi, noise-oxydation-eval and how-it-works above the core library noise-oxydation; the C ABI crate depends on the library without default features, the evaluation tool on the library and on hound, the library only on the optional log facade, and the renderer on nothing">
 </picture>
 
 The library `noise-oxydation` in `crates/core` holds the whole enhancer. It needs only the Rust standard library, plus
 the `log` facade for one debug record at construction, which can be compiled out. The tools in `crates/tools` depend on
 the library and never the other way round: `noise-oxydation-eval` replays real speech through it, compares outputs and
 benchmarks the packet path, and `how-it-works` generates this guide.
+
+A Go service uses the enhancer through the Go package `noiseox` in `go/`. It links `noise-oxydation-capi`, a C ABI
+crate in `crates/bindings` built as a static library, and hides every cgo detail: a Go program creates one `Call` per
+call and passes its own fixed-size packet arrays, so the packet path allocates nothing on either side. The C ABI crate
+is the only place with `unsafe` code for the enhancer, and the Go output is byte-identical to the Rust output.
+[docs/go-integration.md](docs/go-integration.md) explains the boundary, the build and link steps and the measured cost.
 
 The library is a port of the Go project [sghaida/noise-cancelation](https://github.com/sghaida/noise-cancelation).
 `tools/go-parity`, a Go module beside the workspace, runs that original on the same audio so the two can be measured
@@ -64,7 +70,7 @@ that every output is byte-identical to processing the same calls one by one.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works/call-timeline-dark.svg">
-  <img src="docs/assets/how-it-works/call-timeline.svg" alt="Timeline of one call: CallEnhancer::new, two priming packets without output, then one output packet per input packet, drain returning the two withheld packets, and reset leading to the next call; below, the calibration clock with frames 0 to 310 learning the noise until 4.976 s and frame 311 as the first enhanced frame">
+  <img src="docs/assets/how-it-works/call-timeline.svg" alt="Timeline of one call: CallEnhancer::new, two priming packets without output, then one output packet per input packet, drain returning the two withheld packets, and reset leading back to priming for the next call on the same instance; below, the calibration clock with frames 0 to 310 learning the noise until 4.976 s and frame 311 as the first enhanced frame">
 </picture>
 
 - **Priming.** The first two packets return `PacketOutcome::Priming` and produce no output. An output sample is final
@@ -123,6 +129,8 @@ buffers is negligible; the finished output bytes already wait in a fixed ring bu
   original, and the vectorization investigation.
 - [docs/reference-log.md](docs/reference-log.md): every known difference from the Go original, with the measured
   comparison: more than 99.998 % of output bytes are identical on the evaluation recordings.
+- [docs/go-integration.md](docs/go-integration.md): the Go package, its C ABI boundary, build and link steps, and the
+  Go-side latency and allocation measurements.
 - [docs/design-principles.md](docs/design-principles.md): which engineering rules this project follows, and why.
 
 The enhancer is a classical single-channel method. It cannot separate a second talker from the wanted one, it treats

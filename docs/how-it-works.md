@@ -47,7 +47,9 @@ label.
   relationship: an optional dependency, or calibration frames skipping steps. Distinct relationships use distinct
   ports, and a short note is preferred to a long detour.
 - **Canvas.** Both themes draw a 24 px square grid and a thin outer frame. The day canvas is warm paper; the night
-  canvas is muted navy chosen against GitHub's dark surface. Section guides are stronger than the grid.
+  canvas is muted navy chosen against GitHub's dark surface. In the day palette section guides are stronger than the
+  grid; the night palette, inherited unchanged, draws them fainter than its grid, so at night the section headings
+  carry the grouping.
 - **Design width.** Every diagram is 880 units wide, so one SVG unit is one CSS pixel at GitHub's content width and the
   12 px text renders at 12 px.
 
@@ -64,10 +66,10 @@ routing quality are checked by rendering and looking (see [Updating a diagram](#
 | `src/layout.rs` | The shared geometry: text positions inside cards, width estimates, port margin, elbow radius, clearance |
 | `src/validate.rs` | The mechanical grammar rules |
 | `src/svg.rs` | SVG output; it receives one complete palette, so day and night differ only in palette values |
-| `src/diagrams/crate_map.rs` | The crate-map seed (`WORKSPACE_CRATES`, the Go reference pin) and its composition |
+| `src/diagrams/crate_map.rs` | The crate-map seed (`WORKSPACE_CRATES`, the Go reference pin, the Go package's module path and the crate it links) and its composition |
 | `src/diagrams/processing_flow.rs` | The processing-flow composition, following the stage order of `CallEnhancer` |
 | `src/diagrams/call_timeline.rs` | The call-timeline composition, following the timing contract of `ARCHITECTURE.md` |
-| `src/manifest.rs` | The drift check between the crate-map seed, the Cargo manifests, `tools/go-parity/go.mod` and the diagram |
+| `src/manifest.rs` | The drift check between the crate-map seed, the Cargo manifests, `tools/go-parity/go.mod`, `go/go.mod`, the Go package's `#cgo LDFLAGS` and the diagram |
 | `src/guide.rs` | The text of `HOW_IT_WORKS.md` |
 | `src/outputs.rs` | Output paths, the freshness check and writing |
 
@@ -76,8 +78,10 @@ edit them directly.
 
 Compositions are authored: every coordinate is chosen by hand, and there is no layout engine. The crate map is the
 only diagram with a machine-readable source of truth, so it is the only one checked mechanically against the code: a
-crate, a normal dependency, an optional flag or the pinned Go reference that differs between the seed, the manifests
-and the drawn cards and connectors fails generation and `--check`. The processing flow and the call timeline restate
+crate, a normal dependency, an optional flag, the pinned Go reference, the Go package's module path or the static
+library it links that differs between the seed, the manifests and the drawn cards and connectors fails generation and
+`--check`. The manifest reader reads the keys of inline dependency tables exactly, so a feature or version string that
+merely contains `path` or `optional = true` cannot change how a dependency is drawn. The processing flow and the call timeline restate
 facts owned by `ARCHITECTURE.md` and `docs/algorithms.md`; review them against those pages whenever the stage order,
 calibration or packet timing changes.
 

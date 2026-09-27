@@ -1,0 +1,24 @@
+[package]
+name = "noise-oxydation-capi"
+version = "0.1.0"
+description = "C ABI of the noise-oxydation per-call telephony enhancer, built as a static library for the Go package"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "noise_oxydation_capi"
+# `staticlib` is the artifact Go links; `rlib` lets the crate's own tests call the exported functions.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Without the default `log` feature: the static library carries no logging dependency.
+noise-oxydation = { path = "../../core/noise-oxydation", default-features = false }
+
+[[test]]
+name = "integration"
+path = "tests/integration/suite.rs"
+
+[lints]
+workspace = true

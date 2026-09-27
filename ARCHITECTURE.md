@@ -20,11 +20,14 @@ folders under `crates/`; the workspace members are `crates/*/*`. Dependencies po
 | `crates/core/noise-oxydation` | Library: μ-law codec, high-pass filter, STFT/ISTFT, noise estimators (SPP-MMSE, MCRA, minimum), decision-directed SNR, Log-MMSE, tonal transient suppression, and the per-call `CallEnhancer` | `std`; optional `log` facade |
 | `crates/tools/noise-oxydation-eval` | Offline evaluation binary `noise-oxydation-eval`: real-speech replay with quality metrics (`replay`), byte comparison of μ-law outputs (`compare`), and packet latency, allocation, memory and throughput benchmarks (`bench`); see [docs/evaluation.md](docs/evaluation.md) and [docs/performance.md](docs/performance.md) | `noise-oxydation`, `hound` (WAV I/O) |
 | `crates/tools/how-it-works` | Binary `how-it-works`: generates [HOW_IT_WORKS.md](HOW_IT_WORKS.md) and its day and night SVG diagrams, and checks with `--check` that the committed outputs are current; see [docs/how-it-works.md](docs/how-it-works.md) | `std` only |
+| `crates/bindings/noise-oxydation-capi` | C ABI of the per-call API, built as the static library `libnoise_oxydation_capi.a` (and an `rlib` for its own tests) that the Go package links; see [Go Integration Boundary](#go-integration-boundary) | `noise-oxydation` with default features off (no `log`) |
 
-`crates/core` holds the library that applications depend on and `crates/tools` the development tools that depend on
-it. The Go integration item will add a C ABI crate under `crates/bindings/`.
+`crates/core` holds the library that applications depend on, `crates/tools` the development tools that depend on it,
+and `crates/bindings` the foreign-language boundary. Outside the Cargo workspace, [`go/`](go) is the Go module
+`github.com/valsteen/noise-oxydation-claude/go` (package `noiseox`), which links the C ABI crate's static library
+through cgo; see [docs/go-integration.md](docs/go-integration.md).
 
-Outside the Cargo workspace, [`tools/go-parity`](tools/go-parity/main.go) is a Go module that drives the pinned Go
+Also outside the Cargo workspace, [`tools/go-parity`](tools/go-parity/main.go) is a Go module that drives the pinned Go
 reference as a dependency for parity, timing and reference-concern measurements. It is an evidence tool: nothing in
 the workspace depends on it, and CI does not run it.
 
@@ -56,9 +59,10 @@ and `StreamError`. With the `stage-timing` feature it adds `CallEnhancer::stage_
 
 Rules:
 
-- The library crate has no dependency on evaluation, rendering, WAV, or CLI crates. Tools depend on the library, never
-  the reverse. The guide renderer checks its crate-map diagram against the workspace manifests, so a new crate or
-  dependency edge fails its freshness check until the diagram shows it.
+- The library crate has no dependency on evaluation, rendering, WAV, CLI or binding crates. Tools and bindings depend on
+  the library, never the reverse. The guide renderer checks its crate-map diagram against the workspace manifests, the
+  Go package's module path and its cgo link flags, so a new crate, dependency edge or link fails its freshness check
+  until the diagram shows it.
 - Do not add a generic `utils` crate or split the library into per-algorithm crates: every DSP stage shares one
   dependency surface (`std`) and one lifecycle owner (the call), so they stay modules of one crate.
 - A new crate needs an independent dependency, lifecycle, or reuse boundary (for example a C ABI for Go integration).
@@ -70,10 +74,12 @@ Rules:
 A Go call-handling service consumes the library. The Go reference is consumed as ordinary Go packages that the
 application imports and composes itself (one stateful pipeline per call, fed 160-sample chunks). The Rust
 integration keeps that shape, one enhancer per call driven by the application's own call loop, behind a Go package
-that hides every cgo detail.
+that hides every cgo detail. [docs/go-integration.md](docs/go-integration.md) explains the relation, the API and the
+build and link steps.
 
 Boundary decision: a C ABI crate, `crates/bindings/noise-oxydation-capi`, built as a static library and linked into
-the Go binary through cgo, wrapped by an importable Go package in `go/`.
+the Go binary through cgo, wrapped by the importable Go package `noiseox` in `go/` (module
+`github.com/valsteen/noise-oxydation-claude/go`).
 
 | Option | Why not chosen |
 | --- | --- |
@@ -82,21 +88,40 @@ the Go binary through cgo, wrapped by an importable Go package in `go/`.
 | WebAssembly runtime in Go (for example wazero) | Pure Go, but slower, and adds a runtime dependency and memory copies per packet |
 | Rust `cdylib` | Works, but a static library produces one self-contained Go binary without runtime library paths |
 
+The implemented boundary:
+
+| Layer | Items |
+| --- | --- |
+| C declaration | [`go/noise_oxydation.h`](go/noise_oxydation.h), the single header: `nox_config` (every `CallConfig` field, with the calibration in nanoseconds, the three estimators' parameter blocks chosen by a `noise_estimator` selector and the tonal parameters by an `interference` selector), `nox_error`, `nox_str`, the opaque `nox_call`, and `NOX_*` constants for statuses, selectors, outcomes, phases, configuration-error kinds, the 41 fields and the 8 constraints |
+| C ABI (`noise-oxydation-capi`) | `nox_config_default`, `nox_call_new`, `nox_call_process`, `nox_call_drain`, `nox_call_reset`, `nox_call_phase`, `nox_call_free`, and the static texts `nox_status_message`, `nox_config_field_name`, `nox_constraint_description` and `nox_error_message` |
+| Go (`noiseox`) | `Config` and `DefaultConfig`, `New`, and `(*Call).ProcessPacket`, `Drain`, `Reset`, `Phase` and `Close`; the errors `ErrInvalidConfig`, `ErrDrained`, `ErrClosed`, `ErrNilArgument`, `ErrPanic` and `*ConfigError` |
+
 Rules for the boundary:
 
 - The C ABI mirrors the Rust per-call API: create with a validated configuration, process one 160-byte packet into a
-  caller-owned 160-byte output, drain into a caller-owned two-packet buffer, reset, and free. The C configuration
-  covers every `CallConfig` field; its defaults come from the Rust `Default` so there is one source of truth.
-- Handles are opaque. The Go package owns each handle, frees it on `Close`, and treats use after `Close` as a typed
-  error without calling into Rust.
-- Errors cross as status codes plus structured detail (field, constraint and offending value for configuration
-  errors) in caller-owned storage, without allocation. The Go package maps them into typed Go errors that preserve
-  that detail, so Go callers can match categories with `errors.Is` and read details with `errors.As`.
-- No panic may unwind across the boundary; the C ABI catches unwinding and reports it as a status.
-- `unsafe` code is confined to the C ABI crate, each block with a safety comment; the library keeps
-  `#![forbid(unsafe_code)]`.
-- The hot path allocates nothing on either side: Go passes pointers to its own fixed-size arrays, and the Rust side
-  writes into them.
+  caller-owned 160-byte output, drain into a caller-owned two-packet buffer, reset, read the phase, and free. The C
+  configuration covers every `CallConfig` field; `nox_config_default` fills it from the Rust `Default`
+  implementations so there is one source of truth. Struct sizes and field offsets are pinned by compile-time
+  assertions in the crate and by `_Static_assert`s in the header, and the crate's tests compare every header constant
+  and assertion with the Rust definitions.
+- Handles are opaque. The Go package owns each handle, frees it on `Close` (idempotent, with a runtime cleanup as a
+  safety net for a forgotten `Close`), and treats use after `Close` as `ErrClosed` without calling into Rust.
+- Errors cross as a status plus a structured `nox_error` detail in caller-owned storage, without allocation. For a
+  rejected configuration the detail holds a kind for every `ConfigError` variant and all of that variant's data
+  (fields, values, constraint and its bounds, count bounds, calibration duration as seconds and nanoseconds), an
+  unknown-selector kind for a selector value without a variant, and an "other" kind for future variants. The Go package
+  maps it to a `*ConfigError` with the same data that unwraps to `ErrInvalidConfig`; its message is the Rust `Display`
+  text, which `nox_error_message` formats into a Go buffer. Field names and constraint descriptions come from the Rust
+  definitions too.
+- No panic may unwind across the boundary. Every exported function catches unwinding and reports `NOX_STATUS_PANIC`
+  (Go: `ErrPanic`); a handle whose operation panicked is poisoned and answers every later operation with that status.
+- `unsafe` code is confined to the C ABI crate, each block with a safety comment, enforced by
+  `#![deny(unsafe_op_in_unsafe_fn, clippy::undocumented_unsafe_blocks)]`; the library keeps `#![forbid(unsafe_code)]`.
+- The hot path allocates nothing on either side: Go passes pointers to its own fixed-size arrays, the Rust side writes
+  into them, and `#cgo noescape` keeps the arguments from escaping to the Go heap. `nox_call_new` is the only function
+  that allocates. The input packet is copied before the output is written, so both may be the same array.
+- The static library is built with `cargo build --locked --release -p noise-oxydation-capi`. A workspace build unifies
+  features and would re-enable the library's `log` feature in it.
 - A call handle is used by one goroutine at a time; independent calls run in parallel goroutines with one handle each,
   as in Rust.
 
@@ -228,10 +253,16 @@ output with sequential runs. `noise-oxydation-eval bench` repeats the allocation
 and measures latency against the 20 ms cadence ([docs/performance.md](docs/performance.md)).
 
 The library crate forbids `unsafe` code (`#![forbid(unsafe_code)]`), and so do the evaluation crate's library and the
-guide renderer. The workspace contains exactly two `unsafe` sites, both allocation-counting `GlobalAlloc`
-implementations that delegate every call to `std::alloc::System` and count per thread: the library's `allocation` test
-harness and the `noise-oxydation-eval` binary (`crates/tools/noise-oxydation-eval/src/main.rs`). No vectorization or
-other optimization may add `unsafe` to the library; the vectorization investigation adopted no explicit SIMD.
+guide renderer. `unsafe` code exists in exactly three places: the two allocation-counting `GlobalAlloc`
+implementations that delegate every call to `std::alloc::System` and count per thread (the library's `allocation` test
+harness and the `noise-oxydation-eval` binary, `crates/tools/noise-oxydation-eval/src/main.rs`), and the C ABI crate
+`crates/bindings/noise-oxydation-capi`, whose exported functions and tests convert raw pointers under a documented
+caller contract ([Go Integration Boundary](#go-integration-boundary)). No vectorization or other optimization may add
+`unsafe` to the library; the vectorization investigation adopted no explicit SIMD.
+
+The Go package keeps the same packet-path constraints: `ProcessPacket`, `Drain`, `Reset` and `Phase` allocate nothing
+in Go, which its tests check with `testing.AllocsPerRun`, also under the race detector, and the C ABI functions they
+call allocate nothing either.
 
 ## Observability
 
@@ -239,8 +270,9 @@ other optimization may add `unsafe` to the library; the vectorization investigat
   construction (`CallEnhancer::new`), naming the noise estimator and the interference setting, which is initialization
   rather than the packet path; `process_packet`, `drain`, and `reset` never log and report lifecycle facts through their
   return values and `phase()`. Disable at compile time with `default-features = false` or at runtime by installing no
-  logger or filtering the level. Applications and tools log their own call-level events; the evaluation tool prints
-  plain reports to stdout.
+  logger or filtering the level. The C ABI crate depends on the library with default features off, so the static
+  library that Go links contains no logging. Applications and tools log their own call-level events; the evaluation
+  tool prints plain reports to stdout.
 - The `stage-timing` Cargo feature (off by default) is the opt-in performance analysis. Each call accumulates, per
   stage, the invocation count and the total and maximum duration, read with `CallEnhancer::stage_timings` as a `Copy`
   snapshot and cleared by `reset`. The stages are decode and high-pass, analysis, noise estimation, tonal detection,
@@ -257,7 +289,8 @@ other optimization may add `unsafe` to the library; the vectorization investigat
 Clippy pedantic runs with warnings as errors. Lossy numeric conversions that cannot be expressed with a lossless std
 conversion (f64 → f32 narrowing, float → PCM16 quantization) are confined to one audited conversion module per crate:
 `crates/core/noise-oxydation/src/convert.rs` in the library and `crates/tools/noise-oxydation-eval/src/convert.rs` in
-the evaluation crate. The guide renderer computes its geometry in integers and needs none. Every lint expectation is
+the evaluation crate. The guide renderer computes its geometry in integers and needs none, and the C ABI crate copies
+values between identical C and Rust types without conversion. Every lint expectation is
 narrow, carries a `reason`, and is listed in [docs/lint-exceptions.md](docs/lint-exceptions.md).
 
 ## Limitations

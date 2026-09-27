@@ -23,6 +23,9 @@ Each call can instead estimate noise with MCRA or with the simple minimum estima
 suppression off. Tonal transient suppression attenuates narrow tones such as beeps and whistles between 2 and 4 kHz
 by up to about 6 dB, while sparing peaks with harmonic support (voiced speech).
 
+Go programs use it through the `noiseox` package, which hides cgo and keeps the packet path allocation-free; see
+[Using It From Go](#using-it-from-go).
+
 Enhancement quality on real speech and packet-path performance are measured; see
 [Evaluation and Performance](#evaluation-and-performance). [HOW_IT_WORKS.md](HOW_IT_WORKS.md) is an illustrated guide
 to the crates, the path of a packet through a call, what runs sequentially and in parallel, and the call timeline.
@@ -116,6 +119,49 @@ keeps its output packet-aligned. Remember that the first 5 seconds are treated a
 This section adapts the Twilio Media Streams and reset guidance of the Go project's README (MIT License, Copyright (c)
 2026 Saddam Abu Ghaida; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
+## Using It From Go
+
+The Go package `noiseox` (module `github.com/valsteen/noise-oxydation-claude/go`, in [`go/`](go)) wraps the enhancer
+behind a Go API that hides cgo: one `Call` per call, typed errors, and packet methods that pass your own fixed-size
+arrays and allocate nothing. It links the Rust library as a static library, so the Go binary stays self-contained.
+
+The shortest path from another Go program, on macOS or Linux with Go 1.24 or later and a C compiler:
+
+```bash
+git clone git@github.com:valsteen/noise-oxydation-claude.git
+(cd noise-oxydation-claude && cargo build --locked --release -p noise-oxydation-capi)
+cd your-service
+go mod edit -require=github.com/valsteen/noise-oxydation-claude/go@v0.0.0 \
+  -replace=github.com/valsteen/noise-oxydation-claude/go=../noise-oxydation-claude/go
+CGO_ENABLED=1 go build ./...
+```
+
+```go
+call, err := noiseox.New(noiseox.DefaultConfig())
+if err != nil {
+	return err
+}
+defer call.Close()
+var in, out [noiseox.PacketSize]byte
+for receive(&in) {
+	emitted, err := call.ProcessPacket(&in, &out)
+	if err != nil {
+		return err
+	}
+	if emitted {
+		send(&out)
+	}
+}
+var tail [noiseox.DelayPackets][noiseox.PacketSize]byte
+n, err := call.Drain(&tail)
+// send tail[:n]
+```
+
+Fetching the module with `go get` instead needs `GOPRIVATE` and `CGO_LDFLAGS=-L<checkout>/target/release`.
+[docs/go-integration.md](docs/go-integration.md) gives the exact macOS and Linux commands, the API and errors, the
+lifecycle and concurrency rules, and the call-stream example `go/examples/callstream`. Seen from Go, a packet costs the
+same as in Rust within measurement spread, one Go-to-Rust call costs about 28 ns, and the output is byte-identical.
+
 ## Try It
 
 Every command runs from the repository root with the pinned toolchain from `rust-toolchain.toml`, which `rustup`
@@ -190,8 +236,9 @@ the measurement limits.
 
 On an Apple M1 Ultra a packet takes about 17 µs on average (p99.9 under 0.09 ms) against its 20 ms cadence, the
 packet path never allocates, a call holds 18–44 KB, and 100 concurrent calls of 120 s finish in about 0.6–0.7 s,
-3–4 times faster than the Go reference on the same machine and audio. [docs/performance.md](docs/performance.md) has
-the method, the Go comparison, the stage breakdown and the vectorization investigation.
+3–4 times faster than the Go reference on the same machine and audio. Through the Go binding the numbers stay the same
+and the Go call loop allocates nothing. [docs/performance.md](docs/performance.md) has the method, the Go binding
+measurements, the Go comparison, the stage breakdown and the vectorization investigation.
 
 The evidence runs download audio into the Git-ignored `audio/` directory and are not part of CI; [Try It](#try-it)
 lists the commands.
@@ -219,7 +266,8 @@ lists every limitation.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crate map, per-call ownership, buffers and synchronization, packet timing, calibration, constraints |
 | [docs/algorithms.md](docs/algorithms.md) | Equations, defaults and valid ranges of every stage, and why each stage exists |
 | [docs/evaluation.md](docs/evaluation.md) | Real-speech replay: sources, scenarios, metrics, results, listening, limits |
-| [docs/performance.md](docs/performance.md) | Latency, allocation, memory, throughput, Go comparison, stage breakdown, vectorization |
+| [docs/go-integration.md](docs/go-integration.md) | The Go package: boundary choice, API, errors, lifecycle, macOS and Linux build and link steps, example |
+| [docs/performance.md](docs/performance.md) | Latency, allocation, memory, throughput, Go binding, Go comparison, stage breakdown, vectorization |
 | [docs/reference-log.md](docs/reference-log.md) | Every difference from the Go reference and the measured parity |
 | [docs/design-principles.md](docs/design-principles.md) | Which engineering principles are carried, adapted or rejected, and why |
 | [docs/how-it-works.md](docs/how-it-works.md) | The diagram grammar and how to regenerate the guide |
@@ -228,8 +276,9 @@ lists every limitation.
 
 ## Development
 
-The workspace groups its crates by role: the library in `crates/core/noise-oxydation`, and the tools
-`crates/tools/noise-oxydation-eval` and `crates/tools/how-it-works` (the guide renderer). The toolchain is pinned to
+The workspace groups its crates by role: the library in `crates/core/noise-oxydation`, the tools
+`crates/tools/noise-oxydation-eval` and `crates/tools/how-it-works` (the guide renderer), and the C ABI static library
+`crates/bindings/noise-oxydation-capi` that the Go package in `go/` links. The toolchain is pinned to
 Rust 1.98.1 in `rust-toolchain.toml`; formatting uses the pinned nightly rustfmt because `rustfmt.toml` uses unstable
 options. Builds are locked. The CI gates are:
 
@@ -242,6 +291,13 @@ cargo build --locked --workspace --release
 cargo run --locked -p how-it-works -- --check
 ```
 
+A second CI job builds the static library and checks the Go package on Linux and macOS:
+
+```bash
+cargo build --locked --release -p noise-oxydation-capi
+cd go && gofmt -l . && go vet ./... && go test -race ./... && go run ./examples/callstream -synthetic 3000
+```
+
 The tests include per-stage unit tests against independently derived values, a packet lifecycle test over every call
 length from 1 to 600 packets, the calibration boundary, and, for every noise estimator with tonal transient
 suppression on and off: packet timing, reset equivalence, bounded output, stationary-noise attenuation,
@@ -249,7 +305,10 @@ byte-identical parallel calls, and a counting global allocator that asserts the 
 never allocate, with and without the `stage-timing` feature. A sweeping-tone test checks that tonal transient
 suppression attenuates a foreground tone by more than 0.5 dB and at most its 6.02 dB limit. The evaluation crate's
 unit tests cover its file handling, resampler, scenario mixing, metrics and comparison statistics, and the renderer's
-cover its diagram grammar, theme rendering, freshness check and crate-map drift check.
+cover its diagram grammar, theme rendering, freshness check and crate-map drift check. The C ABI crate's tests cover
+every configuration error's payload, null arguments, panic containment, the header's constants and layout, and output
+equal to the Rust API; the Go tests, run with the race detector, cover the lifecycle, every error kind, all 41
+configuration fields, parallel calls, output equal to Rust's, and zero allocations on the packet path.
 
 `HOW_IT_WORKS.md` and its diagrams are generated: change the seeds in `crates/tools/how-it-works` and run
 `cargo run --locked -p how-it-works` ([docs/how-it-works.md](docs/how-it-works.md)). Contributor rules are in

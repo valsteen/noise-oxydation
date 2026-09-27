@@ -1,8 +1,8 @@
-//! Crate map: the workspace crates grouped by theme, their dependencies in dependency direction, and the Go parity
-//! harness beside the workspace.
+//! Crate map: the workspace crates grouped by theme, their dependencies in dependency direction, and the two Go modules
+//! beside the workspace: the `noiseox` package that links the C ABI crate, and the Go parity harness.
 //!
-//! [`WORKSPACE_CRATES`] is the semantic seed. [`crate::manifest`] rejects generation when it differs from the Cargo
-//! manifests or from the cards and connectors below.
+//! [`WORKSPACE_CRATES`] and the Go constants are the semantic seed. [`crate::manifest`] rejects generation when they
+//! differ from the Cargo manifests, the Go modules, or the cards and connectors below.
 
 use crate::model::{
     Anchor, Card, Connector, ConnectorLabel, Diagram, Emphasis, Guide, Note, NoteStyle, Section, Stroke,
@@ -41,6 +41,11 @@ pub(crate) const WORKSPACE_CRATES: &[WorkspaceCrate] = &[
         dependencies: &[Dependency { name: "log", source: DependencySource::Registry { optional: true } }],
     },
     WorkspaceCrate {
+        package: "noise-oxydation-capi",
+        directory: "crates/bindings/noise-oxydation-capi",
+        dependencies: &[Dependency { name: "noise-oxydation", source: DependencySource::Workspace }],
+    },
+    WorkspaceCrate {
         package: "noise-oxydation-eval",
         directory: "crates/tools/noise-oxydation-eval",
         dependencies: &[
@@ -60,28 +65,55 @@ pub(crate) const GO_PARITY_CARD: &str = "go-parity";
 /// Card key of the Go reference module.
 pub(crate) const GO_REFERENCE_CARD: &str = "go-reference";
 
+/// Module path of the Go package in `go/`, as its `go.mod` declares it.
+pub(crate) const GO_PACKAGE_MODULE: &str = "github.com/valsteen/noise-oxydation-claude/go";
+/// Card key of the Go package.
+pub(crate) const GO_PACKAGE_CARD: &str = "go-package";
+/// The workspace crate whose static library the Go package links through cgo.
+pub(crate) const GO_PACKAGE_LINKS: &str = "noise-oxydation-capi";
+
 pub(crate) const DIAGRAM: Diagram = Diagram {
     slug: "crate-map",
     title: "Crate map",
-    description: "The workspace crates grouped into tools and core. The evaluation tool depends on the library and on \
-                  hound; the library depends only on the optional log facade; the guide renderer has no dependency. \
-                  Outside the workspace, the go-parity harness depends on the pinned Go reference module. Arrows \
-                  point from a crate to what it depends on.",
+    description: "The Go modules, the workspace crates grouped into tools and bindings and core, and their external \
+                  dependencies. The noiseox Go package links the noise-oxydation-capi static library through cgo, and \
+                  the C ABI crate depends on the library with its default features off. The evaluation tool depends \
+                  on the library and on hound; the library depends only on the optional log facade; the guide \
+                  renderer has no dependency. The go-parity harness depends on the pinned Go reference module. Arrows \
+                  point from a crate or module to what it depends on.",
     width: 880,
-    height: 608,
+    height: 824,
     sections: &[
-        Section { label: "Tools", subtitle: &[], x: 24, y: 44 },
-        Section { label: "Core", subtitle: &[], x: 24, y: 252 },
-        Section { label: "External", subtitle: &[], x: 24, y: 452 },
+        Section { label: "Go modules", subtitle: &[], x: 24, y: 44 },
+        Section { label: "Tools and bindings", subtitle: &[], x: 24, y: 252 },
+        Section { label: "Core", subtitle: &[], x: 24, y: 468 },
+        Section { label: "External crates", subtitle: &[], x: 24, y: 668 },
     ],
     guides: &[
-        Guide { start: (84, 40), end: (856, 40) },
-        Guide { start: (76, 248), end: (856, 248) },
-        Guide { start: (108, 448), end: (856, 448) },
+        Guide { start: (124, 40), end: (856, 40) },
+        Guide { start: (188, 248), end: (856, 248) },
+        Guide { start: (76, 464), end: (856, 464) },
+        Guide { start: (168, 664), end: (856, 664) },
     ],
     connectors: &[
         Connector {
-            points: &[(156, 208), (156, 276)],
+            points: &[(144, 208), (144, 276)],
+            source: Some(GO_PACKAGE_CARD),
+            target: Some(GO_PACKAGE_LINKS),
+            label: Some(ConnectorLabel { text: "cgo, static", position: (206, 232) }),
+            stroke: Stroke::Solid,
+            arrow: true,
+        },
+        Connector {
+            points: &[(144, 424), (144, 492)],
+            source: Some(GO_PACKAGE_LINKS),
+            target: Some("noise-oxydation"),
+            label: Some(ConnectorLabel { text: "no default features", position: (232, 448) }),
+            stroke: Stroke::Solid,
+            arrow: true,
+        },
+        Connector {
+            points: &[(376, 424), (376, 492)],
             source: Some("noise-oxydation-eval"),
             target: Some("noise-oxydation"),
             label: None,
@@ -89,7 +121,7 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             arrow: true,
         },
         Connector {
-            points: &[(336, 208), (336, 476)],
+            points: &[(440, 424), (440, 692)],
             source: Some("noise-oxydation-eval"),
             target: Some("hound"),
             label: None,
@@ -97,15 +129,15 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             arrow: true,
         },
         Connector {
-            points: &[(144, 404), (144, 476)],
+            points: &[(144, 620), (144, 692)],
             source: Some("noise-oxydation"),
             target: Some("log"),
-            label: Some(ConnectorLabel { text: "optional", position: (188, 434) }),
+            label: Some(ConnectorLabel { text: "optional", position: (188, 650) }),
             stroke: Stroke::Dashed,
             arrow: true,
         },
         Connector {
-            points: &[(800, 208), (800, 476)],
+            points: &[(560, 134), (592, 134)],
             source: Some(GO_PARITY_CARD),
             target: Some(GO_REFERENCE_CARD),
             label: None,
@@ -115,14 +147,62 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
     ],
     cards: &[
         Card {
+            key: GO_PACKAGE_CARD,
+            label: "Go package · go/",
+            title: "noiseox",
+            details: &["one Call per call, cgo hidden", "no allocation per packet"],
+            meta: &["github.com/valsteen/", "noise-oxydation-claude/go"],
+            x: 24,
+            y: 60,
+            width: 288,
+            height: 148,
+            emphasis: Emphasis::Primary,
+        },
+        Card {
+            key: GO_PARITY_CARD,
+            label: "Go module · evidence",
+            title: "go-parity",
+            details: &["runs the Go reference for", "parity and timing evidence"],
+            meta: &["tools/go-parity"],
+            x: 336,
+            y: 60,
+            width: 224,
+            height: 148,
+            emphasis: Emphasis::Secondary,
+        },
+        Card {
+            key: GO_REFERENCE_CARD,
+            label: "Go module · reference",
+            title: "noise-cancelation",
+            details: &["sghaida, pinned at cfc7520"],
+            meta: &[GO_REFERENCE_VERSION],
+            x: 592,
+            y: 60,
+            width: 264,
+            height: 148,
+            emphasis: Emphasis::Secondary,
+        },
+        Card {
+            key: GO_PACKAGE_LINKS,
+            label: "Static library",
+            title: "noise-oxydation-capi",
+            details: &["C ABI of the per-call packet API", "its unsafe code stays in this crate"],
+            meta: &["crates/bindings/noise-oxydation-capi"],
+            x: 24,
+            y: 276,
+            width: 288,
+            height: 148,
+            emphasis: Emphasis::Primary,
+        },
+        Card {
             key: "noise-oxydation-eval",
             label: "Binary · crates/tools",
             title: "noise-oxydation-eval",
-            details: &["replays real speech, compares outputs,", "benchmarks the packet path"],
+            details: &["replays real speech, compares", "outputs, benchmarks packets"],
             meta: &["crates/tools/noise-oxydation-eval"],
-            x: 24,
-            y: 60,
-            width: 336,
+            x: 336,
+            y: 276,
+            width: 264,
             height: 148,
             emphasis: Emphasis::Primary,
         },
@@ -132,23 +212,11 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             title: "how-it-works",
             details: &["generates this guide and", "its day and night diagrams", "std only, no dependencies"],
             meta: &["crates/tools/how-it-works"],
-            x: 384,
-            y: 60,
-            width: 216,
-            height: 148,
-            emphasis: Emphasis::Primary,
-        },
-        Card {
-            key: GO_PARITY_CARD,
-            label: "Go module · evidence",
-            title: "go-parity",
-            details: &["runs the Go reference for", "parity and timing evidence", "outside the Cargo workspace"],
-            meta: &["tools/go-parity"],
             x: 624,
-            y: 60,
+            y: 276,
             width: 232,
             height: 148,
-            emphasis: Emphasis::Secondary,
+            emphasis: Emphasis::Primary,
         },
         Card {
             key: "noise-oxydation",
@@ -157,8 +225,8 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             details: &["one CallEnhancer per call", "every DSP stage is a module"],
             meta: &["crates/core/noise-oxydation"],
             x: 24,
-            y: 276,
-            width: 264,
+            y: 492,
+            width: 392,
             height: 128,
             emphasis: Emphasis::Primary,
         },
@@ -169,7 +237,7 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             details: &["facade behind the log feature"],
             meta: &[],
             x: 24,
-            y: 476,
+            y: 692,
             width: 240,
             height: 108,
             emphasis: Emphasis::Secondary,
@@ -180,47 +248,36 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             title: "hound 3.5",
             details: &["WAV reading and writing"],
             meta: &[],
-            x: 312,
-            y: 476,
+            x: 336,
+            y: 692,
             width: 216,
-            height: 108,
-            emphasis: Emphasis::Secondary,
-        },
-        Card {
-            key: GO_REFERENCE_CARD,
-            label: "Go module · reference",
-            title: "noise-cancelation",
-            details: &["sghaida, pinned at cfc7520"],
-            meta: &[GO_REFERENCE_VERSION],
-            x: 576,
-            y: 476,
-            width: 280,
             height: 108,
             emphasis: Emphasis::Secondary,
         },
     ],
     notes: &[
         Note {
-            text: "Arrows point from a crate to what it depends on.",
-            x: 360,
-            y: 316,
+            text: "Arrows point from a crate or module to what it",
+            x: 472,
+            y: 516,
             anchor: Anchor::Start,
             style: NoteStyle::Plain,
         },
         Note {
-            text: "Tools depend on the library, never the reverse.",
-            x: 360,
-            y: 338,
+            text: "depends on. Tools and bindings depend on the",
+            x: 472,
+            y: 534,
             anchor: Anchor::Start,
             style: NoteStyle::Plain,
         },
+        Note { text: "library, never the reverse.", x: 472, y: 552, anchor: Anchor::Start, style: NoteStyle::Plain },
         Note {
             text: "go-parity drives the Go reference; nothing in the",
-            x: 360,
-            y: 368,
+            x: 472,
+            y: 582,
             anchor: Anchor::Start,
             style: NoteStyle::Plain,
         },
-        Note { text: "workspace depends on it.", x: 360, y: 386, anchor: Anchor::Start, style: NoteStyle::Plain },
+        Note { text: "workspace depends on it.", x: 472, y: 600, anchor: Anchor::Start, style: NoteStyle::Plain },
     ],
 };

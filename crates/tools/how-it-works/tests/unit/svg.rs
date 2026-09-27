@@ -80,9 +80,9 @@ fn text_is_painted_after_all_geometry() {
 
 #[test]
 fn turns_are_drawn_as_soft_elbows() {
-    let svg = render(&diagrams::call_timeline::DIAGRAM, &DAY).expect("shipped diagrams are valid");
-    // The reset -> new route turns once at (144, 324): it ends straight, curves around the corner, then goes straight.
-    assert!(svg.contains(r#"<path d="M296 324L156 324Q144 324 144 312L144 196""#), "{svg}");
+    let svg = render(&diagrams::processing_flow::DIAGRAM, &DAY).expect("shipped diagrams are valid");
+    // The route from (316, 316) turns once at (48, 316): straight, a curve around the corner, then straight down.
+    assert!(svg.contains(r#"<path d="M316 316L60 316Q48 316 48 328L48 612""#), "{svg}");
 }
 
 #[test]

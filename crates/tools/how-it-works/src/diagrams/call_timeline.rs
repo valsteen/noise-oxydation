@@ -11,9 +11,10 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
     title: "The timeline of one call",
     description: "A call starts with CallEnhancer::new. Packets 1 and 2 return Priming and produce no output. From \
                   packet 3 on, every packet returns one enhanced packet carrying the input of two packets earlier. \
-                  Drain returns the two withheld packets, and reset starts the next call on the same instance. With \
-                  the 5 s default, frames 0 to 310 are calibration frames that pass through un-enhanced while the \
-                  noise is learned; frame 311, starting at 4.976 s, is the first enhanced frame.",
+                  Drain returns the two withheld packets, and reset starts the next call on the same instance, which \
+                  primes again without constructing or allocating anything. With the 5 s default, frames 0 to 310 are \
+                  calibration frames that pass through un-enhanced while the noise is learned; frame 311, starting at \
+                  4.976 s, is the first enhanced frame.",
     width: 880,
     height: 684,
     sections: &[
@@ -55,10 +56,10 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             arrow: true,
         },
         Connector {
-            points: &[(296, 324), (144, 324), (144, 196)],
+            points: &[(424, 264), (424, 196)],
             source: Some("reset"),
-            target: Some("new"),
-            label: Some(ConnectorLabel { text: "same instance", position: (220, 314) }),
+            target: Some("priming"),
+            label: Some(ConnectorLabel { text: "same instance", position: (484, 234) }),
             stroke: Stroke::Dashed,
             arrow: true,
         },

@@ -316,6 +316,22 @@ saturating float-to-integer cast, which maps NaN to 0. The reference converts wi
 implementation-specific, so it can differ by platform. NaN cannot reach the Rust encoder from valid μ-law input: every
 stage replaces non-finite intermediate values with 0 or its floor.
 
+### R15. The Go package is the per-call processor the README describes
+
+The reference is consumed as ordinary Go packages: the application runs `go get` on the module
+([R/README.md#L1419-L1423](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L1419-L1423)),
+creates one stateful processor per call, feeds it every incoming chunk, forwards whatever it returns, and resets it
+between calls ([R/README.md#L1734-L1806](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L1734-L1806),
+[#L1852-L1866](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L1852-L1866)).
+The processor itself is not shipped (D4); the end-to-end benchmark composes the packages by hand, one call per
+goroutine ([R/benchmark/end_to_end_benchmark_test.go#L189-L221](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/benchmark/end_to_end_benchmark_test.go#L189-L221)).
+The Go package `noiseox` in `go/` keeps that shape: an application imports it, creates one `Call` per call with
+`noiseox.New`, feeds each packet to `ProcessPacket`, drains at the end and reuses the `Call` with `Reset`, one
+goroutine per call. It differs from the README sketch in three ways: it takes and returns μ-law packets rather than
+float PCM, it returns exactly one packet per input packet after the two-packet delay rather than a variable-length
+slice (R2), and its destination is a caller-owned fixed array, which is the allocation-free "production buffer API" the
+README recommends. See [go-integration.md](go-integration.md).
+
 ## Measured Parity
 
 Every numeric comparison with the reference that was actually run. Parity is claimed only for what these entries
