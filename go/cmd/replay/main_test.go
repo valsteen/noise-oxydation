@@ -25,7 +25,7 @@ func TestReplayRejectsInputOutputAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, output := range aliases {
-		if err := run(input, output, noise.SppMmse); err == nil || !strings.Contains(err.Error(), "input and output identify the same file") {
+		if err := run(input, output, noise.SppMmse, noise.Conservative); err == nil || !strings.Contains(err.Error(), "input and output identify the same file") {
 			t.Errorf("replay with input alias %q returned %v", output, err)
 		}
 		got, err := os.ReadFile(input)

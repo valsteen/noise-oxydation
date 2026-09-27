@@ -11,25 +11,25 @@ pub enum NoiseEstimator {
     Minimum,
 }
 
-pub(super) struct NoiseState {
+pub(super) struct NoiseState<const HISTORY: usize = WINDOW> {
     pub(super) selected: NoiseEstimator,
     pub(super) noise: [f32; BINS],
     probability: [f32; BINS],
     smoothed: [f32; BINS],
-    history: [[f32; BINS]; WINDOW],
+    history: [[f32; BINS]; HISTORY],
     history_len: usize,
     history_next: usize,
 }
 
-impl NoiseState {
-    #[allow(clippy::large_stack_arrays)] // Fixed 50-by-129 history belongs to the call, including after construction.
+impl<const HISTORY: usize> NoiseState<HISTORY> {
+    #[allow(clippy::large_stack_arrays)] // Fixed per-call history belongs to the call, including after construction.
     pub(super) fn new(selected: NoiseEstimator) -> Self {
         Self {
             selected,
             noise: [FLOOR; BINS],
             probability: [0.0; BINS],
             smoothed: [FLOOR; BINS],
-            history: [[0.0; BINS]; WINDOW],
+            history: [[0.0; BINS]; HISTORY],
             history_len: 0,
             history_next: 0,
         }
@@ -56,13 +56,13 @@ impl NoiseState {
                 self.history_len = 1;
                 self.history_next = 1;
             }
-            self.history_len = (self.history_len + 1).min(WINDOW);
+            self.history_len = (self.history_len + 1).min(HISTORY);
         }
     }
 
     pub(super) fn end_frame(&mut self) {
         if self.selected != NoiseEstimator::SppMmse {
-            self.history_next = (self.history_next + 1) % WINDOW;
+            self.history_next = (self.history_next + 1) % HISTORY;
         }
     }
 
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn minimum_window_evicts_oldest_frame() {
-        let mut state = NoiseState::new(NoiseEstimator::Minimum);
+        let mut state = NoiseState::<WINDOW>::new(NoiseEstimator::Minimum);
         state.noise[10] = 1.0;
         state.smoothed[10] = 1.0;
         for frame in 0..=WINDOW {
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn mcra_probability_controls_noise_coefficient() {
-        let mut onset = NoiseState::new(NoiseEstimator::Mcra);
+        let mut onset = NoiseState::<WINDOW>::new(NoiseEstimator::Mcra);
         onset.noise[10] = 1.0;
         onset.smoothed[10] = 1.0;
         onset.begin_frame();
@@ -140,7 +140,7 @@ mod tests {
         onset.end_frame();
         assert!((onset.noise[10] - 1.99).abs() < 1.0e-4);
 
-        let mut state = NoiseState::new(NoiseEstimator::Mcra);
+        let mut state = NoiseState::<WINDOW>::new(NoiseEstimator::Mcra);
         state.noise[10] = 1.0;
         state.smoothed[10] = 1.0;
         state.begin_frame();
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn mcra_does_not_learn_sustained_voice_after_minimum_turnover() {
-        let mut state = NoiseState::new(NoiseEstimator::Mcra);
+        let mut state = NoiseState::<WINDOW>::new(NoiseEstimator::Mcra);
         state.noise[10] = 1.0;
         state.smoothed[10] = 1.0;
         for _ in 0..=WINDOW * 2 {
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn mcra_tracks_a_broadband_rise_after_minimum_turnover() {
-        let mut state = NoiseState::new(NoiseEstimator::Mcra);
+        let mut state = NoiseState::<WINDOW>::new(NoiseEstimator::Mcra);
         state.noise[10] = 1.0;
         state.smoothed[10] = 1.0;
         for _ in 0..=WINDOW * 2 {

@@ -1,4 +1,4 @@
-use noise_oxydation_pipeline::{Config, NoiseEstimator, PACKET_SAMPLES, Pipeline};
+use noise_oxydation_pipeline::{Config, NoiseEstimator, PACKET_SAMPLES, Pipeline, ProcessingMode};
 use std::error::Error;
 use std::fs;
 use std::hint::black_box;
@@ -30,9 +30,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = args.next().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidInput,
-            "usage: packet_bench <verified OSR prepared.mulaw>",
+            "usage: packet_bench <verified OSR prepared.mulaw> [conservative|experimental]",
         )
     })?;
+    let mode = match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+        None | Some("conservative") => ProcessingMode::Conservative,
+        Some("experimental") => ProcessingMode::ExperimentalLowDelay,
+        _ => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "mode must be conservative or experimental",
+            )
+            .into());
+        }
+    };
     if args.next().is_some() {
         return Err(io::Error::new(ErrorKind::InvalidInput, "too many arguments").into());
     }
@@ -42,7 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let packets = input.as_chunks::<PACKET_SAMPLES>().0;
     println!(
-        "{} {} {} build; {} OSR input packets; 250 learning, 50 transition, {} suppression",
+        "{mode:?}: {} {} {} build; {} OSR input packets; 250 learning, 50 transition, {} suppression",
         std::env::consts::OS,
         std::env::consts::ARCH,
         if cfg!(debug_assertions) {
@@ -58,10 +69,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         NoiseEstimator::Mcra,
         NoiseEstimator::Minimum,
     ] {
-        let mut pipeline = Pipeline::new(Config {
-            noise_estimator,
-            ..Config::default()
-        })
+        let mut pipeline = Pipeline::new_with_mode(
+            Config {
+                noise_estimator,
+                ..Config::default()
+            },
+            mode,
+        )
         .expect("valid configuration");
         for packet in packets {
             black_box(pipeline.process_packet(packet).expect("active warmup call"));

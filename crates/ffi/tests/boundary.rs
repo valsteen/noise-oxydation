@@ -1,5 +1,7 @@
-use noise_oxydation_ffi::{NoCall, no_create, no_destroy, no_finish, no_process, no_reset};
-use noise_oxydation_pipeline::{Config, NoiseEstimator, PacketBatch, Pipeline};
+use noise_oxydation_ffi::{
+    NoCall, no_create, no_create_with_mode, no_destroy, no_finish, no_process, no_reset,
+};
+use noise_oxydation_pipeline::{Config, NoiseEstimator, PacketBatch, Pipeline, ProcessingMode};
 use std::ptr;
 
 fn append(batch: &PacketBatch, bytes: &mut Vec<u8>) {
@@ -108,5 +110,55 @@ fn constructor_preserves_error_cause() {
         assert_eq!(no_create(5_000_000_000, 3, &raw mut handle).status, 4);
         assert!(handle.is_null());
         assert_eq!(no_create(5_000_000_000, 0, ptr::null_mut()).status, 1);
+        assert_eq!(
+            no_create_with_mode(5_000_000_000, 0, 99, &raw mut handle).status,
+            10
+        );
+        assert!(handle.is_null());
+    }
+}
+
+#[test]
+fn experimental_ffi_matches_direct_pipeline() {
+    let mut handle: *mut NoCall = ptr::null_mut();
+    // SAFETY: The handle and fixed buffers are valid and used serially.
+    unsafe {
+        assert_eq!(
+            no_create_with_mode(1_000_000_000, 1, 1, &raw mut handle).status,
+            0
+        );
+        let mut direct = Pipeline::new_with_mode(
+            Config {
+                learning_duration: std::time::Duration::from_secs(1),
+                noise_estimator: NoiseEstimator::Mcra,
+            },
+            ProcessingMode::ExperimentalLowDelay,
+        )
+        .unwrap();
+        let mut ffi_output = [0; 320];
+        let mut expected = Vec::new();
+        let mut actual = Vec::new();
+        for index in 0..110 {
+            let input = [u8::try_from(index).unwrap(); 160];
+            append(&direct.process_packet(&input).unwrap(), &mut expected);
+            let result = no_process(handle, input.as_ptr(), 160, ffi_output.as_mut_ptr(), 320);
+            assert_eq!(result.status, 0);
+            for packet in 0..result.count as usize {
+                actual.extend_from_slice(&ffi_output[packet * 160..packet * 160 + 160]);
+            }
+        }
+        append(&direct.finish().unwrap(), &mut expected);
+        let result = no_finish(handle, ffi_output.as_mut_ptr(), 320);
+        assert_eq!(result.status, 0);
+        for packet in 0..result.count as usize {
+            let valid = if packet + 1 == result.count as usize {
+                result.final_valid as usize
+            } else {
+                160
+            };
+            actual.extend_from_slice(&ffi_output[packet * 160..packet * 160 + valid]);
+        }
+        assert_eq!(actual, expected);
+        assert_eq!(no_destroy(handle).status, 0);
     }
 }

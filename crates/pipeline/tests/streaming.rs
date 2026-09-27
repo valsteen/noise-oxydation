@@ -2,7 +2,7 @@
 
 use noise_oxydation_codec::{decode, encode};
 use noise_oxydation_pipeline::{
-    Config, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline, PipelineError,
+    Config, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline, PipelineError, ProcessingMode,
 };
 use std::error::Error;
 use std::time::Duration;
@@ -11,6 +11,78 @@ fn take(batch: &PacketBatch, output: &mut Vec<u8>) {
     for index in 0..batch.len() {
         let (packet, valid) = batch.packet(index).unwrap();
         output.extend_from_slice(&packet[..valid]);
+    }
+}
+
+#[test]
+fn experimental_mode_returns_a_whole_packet_on_input_two() {
+    for noise_estimator in [
+        NoiseEstimator::SppMmse,
+        NoiseEstimator::Mcra,
+        NoiseEstimator::Minimum,
+    ] {
+        for mode in [
+            ProcessingMode::Conservative,
+            ProcessingMode::ExperimentalLowDelay,
+        ] {
+            let mut pipeline = Pipeline::new_with_mode(
+                Config {
+                    noise_estimator,
+                    ..Config::default()
+                },
+                mode,
+            )
+            .unwrap();
+            let mut output = Vec::new();
+            for index in 0..8 {
+                let batch = pipeline
+                    .process_packet(&[encode(900); PACKET_SAMPLES])
+                    .unwrap();
+                if index == 1 {
+                    assert_eq!(
+                        batch.len(),
+                        usize::from(mode == ProcessingMode::ExperimentalLowDelay)
+                    );
+                }
+                if index == 2 && mode == ProcessingMode::Conservative {
+                    assert_eq!(batch.len(), 1);
+                }
+                take(&batch, &mut output);
+            }
+            take(&pipeline.finish().unwrap(), &mut output);
+            assert_eq!(output.len(), 8 * PACKET_SAMPLES);
+            assert!(
+                output
+                    .iter()
+                    .all(|&code| decode(code) == decode(encode(900)))
+            );
+            pipeline.reset();
+            let mut repeated = Vec::new();
+            for _ in 0..8 {
+                take(
+                    &pipeline
+                        .process_packet(&[encode(900); PACKET_SAMPLES])
+                        .unwrap(),
+                    &mut repeated,
+                );
+            }
+            take(&pipeline.finish().unwrap(), &mut repeated);
+            assert_eq!(output, repeated);
+            for packets in [0, 1, 2, 3] {
+                pipeline.reset();
+                let mut short = Vec::new();
+                for _ in 0..packets {
+                    take(
+                        &pipeline
+                            .process_packet(&[encode(900); PACKET_SAMPLES])
+                            .unwrap(),
+                        &mut short,
+                    );
+                }
+                take(&pipeline.finish().unwrap(), &mut short);
+                assert_eq!(short.len(), packets * PACKET_SAMPLES, "{mode:?} {packets}");
+            }
+        }
     }
 }
 
@@ -114,16 +186,24 @@ fn default_and_alternate_learning_bypass_then_suppress_noise() {
         NoiseEstimator::Minimum,
     ] {
         for seconds in [1, 5] {
-            check_suppression(seconds, noise_estimator);
+            for mode in [
+                ProcessingMode::Conservative,
+                ProcessingMode::ExperimentalLowDelay,
+            ] {
+                check_suppression(seconds, noise_estimator, mode);
+            }
         }
     }
 }
 
-fn check_suppression(seconds: usize, noise_estimator: NoiseEstimator) {
-    let mut pipeline = Pipeline::new(Config {
-        learning_duration: Duration::from_secs(seconds as u64),
-        noise_estimator,
-    })
+fn check_suppression(seconds: usize, noise_estimator: NoiseEstimator, mode: ProcessingMode) {
+    let mut pipeline = Pipeline::new_with_mode(
+        Config {
+            learning_duration: Duration::from_secs(seconds as u64),
+            noise_estimator,
+        },
+        mode,
+    )
     .unwrap();
     let mut input_pcm = Vec::new();
     let mut output = Vec::new();
@@ -151,10 +231,7 @@ fn check_suppression(seconds: usize, noise_estimator: NoiseEstimator) {
         .map(|&code| f32::from(decode(code)) / 32_768.0)
         .collect();
     assert!(processed.iter().all(|sample| sample.is_finite()));
-    assert_eq!(
-        &processed[..seconds * 8_000 - 1_000],
-        &input_pcm[..seconds * 8_000 - 1_000]
-    );
+    assert_eq!(&processed[..seconds * 8_000], &input_pcm[..seconds * 8_000]);
     let rms = |samples: &[f32]| {
         (samples.iter().map(|value| value * value).sum::<f32>() / samples.len() as f32).sqrt()
     };
@@ -165,9 +242,12 @@ fn check_suppression(seconds: usize, noise_estimator: NoiseEstimator) {
     let speech_out = rms(&processed[speech_start..speech_start + 6_000]);
     assert!(
         noise_out < noise_in * 0.8,
-        "noise input {noise_in}, output {noise_out}"
+        "{mode:?} noise input {noise_in}, output {noise_out}"
     );
-    assert!(speech_out > 0.16, "speech output RMS {speech_out}");
+    assert!(
+        speech_out > 0.16,
+        "{mode:?} {noise_estimator:?} {seconds}s speech output RMS {speech_out}"
+    );
 }
 
 #[test]

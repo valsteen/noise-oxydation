@@ -4,6 +4,8 @@ Noise Oxydation enhances 8 kHz mono telephony audio carried in 160-byte G.711 μ
 
 Go programs can import [`github.com/valsteen/noise-oxydation/go`](go/README.md) to use the same Rust packet pipeline without writing cgo. Build the Rust staticlib for the target first, then supply its path through `CGO_LDFLAGS`. The [Go guide](go/README.md) gives exact macOS/Linux commands, a complete buffered call-stream replay, an external-module import check, and representative packet latency and allocation measurements. Each Go `Call` owns a native pipeline and serializes its lifecycle, including `Close`. The Rust process/finish core remains allocation-free and lock-free; Go/cgo scheduling has no hard real-time guarantee.
 
+The default **conservative** mode preserves the existing audio output and first returns a complete packet with input packet three. An **experimental lower-delay** mode returns the first complete packet with input packet two, at a higher processing cost and with possible quality differences. Both modes are available per call in the same binary. [Processing modes and comparison](docs/processing-modes.md) shows how to select each mode, reproduces the A/B measurements, and describes the experimental risks.
+
 ```rust
 use noise_oxydation_pipeline::{Config, Pipeline};
 
@@ -23,11 +25,13 @@ for index in 0..tail.len() {
 
 The example's `send_valid_audio` stands for the caller's transport. This crate does not provide one. Processing after `finish` returns `AlreadyFinished` until `reset`. Configuration accepts a runtime `learning_duration` and a `noise_estimator` selected from `NoiseEstimator::{SppMmse, Mcra, Minimum}`. SPP-MMSE and five seconds are the defaults. For example, use `Config { noise_estimator: NoiseEstimator::Mcra, ..Config::default() }`. Intervals shorter than one 256-sample FFT window are rejected with a typed DSP cause.
 
+For the experimental mode, construct the call with `Pipeline::new_with_mode(config, ProcessingMode::ExperimentalLowDelay)`. The usual `Pipeline::new(config)` remains conservative. Go callers can set `Config.Mode` to `ExperimentalLowDelay`; the zero value stays conservative.
+
 The first five seconds of audio are audibly passed through while the pipeline learns stationary noise. The frame scheduler rounds the first suppressed sample to the next 128-sample hop: with the default, suppression begins at sample 40,064 (5.008 seconds). **A quiet call intro is assumed.** Speech during learning can contaminate the noise estimate and reduce later suppression. Choose another duration if the call setup provides a different quiet interval.
 
-The implemented path is μ-law decode, a high-pass filter, 256-point Hann STFT with a 128-sample hop, selected noise estimation, decision-directed SNR, Log-MMSE gain, tonal transient gain, normalized ISTFT, and μ-law encode. The learning interval emits the original decoded audio rather than the filtered reconstruction. The first whole output packet arrives with the third 20 ms input packet in the packet timing test.
+The conservative path is μ-law decode, a high-pass filter, 256-point Hann STFT with a 128-sample hop, selected noise estimation, decision-directed SNR, Log-MMSE gain, tonal transient gain, normalized ISTFT, and μ-law encode. The learning interval emits the original decoded audio rather than the filtered reconstruction. The first whole output packet arrives with the third 20 ms input packet in the packet timing test. The experimental path keeps the 256-point spectral processing but uses an 80-sample hop and shorter asymmetric synthesis; see the comparison guide for its exact timing and limits.
 
-The simple minimum and MCRA estimators smooth each bin's power and search a fixed 50-frame minimum history. MCRA uses that minimum to estimate speech presence, then updates noise with `αₙ = 0.95 + 0.05p`. High posterior SNR also protects sustained narrowband voice when the window turns over. The simple minimum remains a lower-envelope estimator and may suppress continuous foreground sound.
+In conservative mode, the simple minimum and MCRA estimators smooth each bin's power and search a fixed 50-frame minimum history. Experimental mode uses 80 frames to retain the same 800 ms history at its shorter hop. MCRA uses that minimum to estimate speech presence, then updates noise with `αₙ = 0.95 + 0.05p`. High posterior SNR also protects sustained narrowband voice when the window turns over. The simple minimum remains a lower-envelope estimator and may suppress continuous foreground sound.
 
 Tonal gain is enabled for all three estimators. Local prominence, positive flux, frequency movement, persistent tonal evidence, and harmonic support determine a conservative target gain. Attack/release smoothing and a two-bin neighbor spread follow.
 
@@ -39,7 +43,7 @@ The `performance-analysis` feature enables two offline examples. The packet benc
 
 For real-speech replay, download [OSR_us_000_0010_8k.wav](https://www.voiptroubleshooter.com/open_speech/american/OSR_us_000_0010_8k.wav) from **Open Speech Repository** outside Git. The verified 8 kHz mono 16-bit PCM source has 268,985 samples and SHA-256 `a4bf9becd046d7aedb6d05b6e12347a6294a44f74d263089c636fb0a2b1e6561`. Run `cargo run --release --locked -p noise-oxydation-pipeline --features performance-analysis --example wav_replay -- /private/tmp/OSR_us_000_0010_8k.wav /private/tmp/OSR_us_000_0010_8k-prepared.mulaw`, then hash the prepared stream. The clip and generated audio are not committed.
 
-The replay puts fixed-seed noise in calibration `[0,40000)` and post-calibration `[40000,48000)`, then adds the recorded speech from sample 48,000. All estimators receive identical μ-law bytes and return 317,120 valid samples. Noise RMS output/input is measured only on `[40800,47200)`. Pearson correlation and projection gain `Σ(output × clean) / Σ(clean²)` use `[48800,48000+N-800)`, with `N` equal to the source sample count and a μ-law-quantized clean reference.
+The conservative replay puts fixed-seed noise in calibration `[0,40000)` and post-calibration `[40000,48000)`, then adds the recorded speech from sample 48,000. All estimators receive identical μ-law bytes and return 317,120 valid samples. Noise RMS output/input is measured only on `[40800,47200)`. Pearson correlation and projection gain `Σ(output × clean) / Σ(clean²)` use `[48800,48000+N-800)`, with `N` equal to the source sample count and a μ-law-quantized clean reference. Add `experimental` as the final replay argument and use a separate output directory to compare the second mode on identical input.
 
 | Estimator | Noise RMS ratio | Speech correlation | Speech projection gain |
 | --- | ---: | ---: | ---: |
