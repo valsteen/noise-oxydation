@@ -12,14 +12,18 @@ numerical parity with it is claimed yet.
 
 ## Status
 
-The default processing path works end to end:
+The complete documented processing path works end to end. The default call runs:
 
 μ-law decode → 80 Hz high-pass → STFT (256-sample Hann frames, 128-sample hop) → SPP-MMSE noise estimation with a
-5-second quiet-intro calibration → decision-directed SNR → Log-MMSE suppression → ISTFT → μ-law encode.
+5-second quiet-intro calibration → decision-directed SNR → Log-MMSE suppression → tonal transient suppression →
+ISTFT → μ-law encode.
 
-Still to come: the MCRA and minimum-statistics noise estimators, tonal transient (beep and click) suppression, a
-real-speech evaluation with quality metrics, latency measurements, and an illustrated guide. Until the evaluation
-exists, enhancement quality on real speech has not been measured.
+Each call can instead estimate noise with MCRA or with the simple minimum estimator, and can turn tonal transient
+suppression off. Tonal transient suppression attenuates narrow tones such as beeps and whistles between 2 and 4 kHz
+by up to about 6 dB, while sparing peaks with harmonic support (voiced speech).
+
+Still to come: a real-speech evaluation with quality metrics, latency measurements, and an illustrated guide. Until
+the evaluation exists, enhancement quality on real speech has not been measured.
 
 ## How a Call Works
 
@@ -33,8 +37,8 @@ exists, enhancement quality on real speech has not been measured.
 - **One instance per call.** Instances share nothing, so independent calls run in parallel on separate threads. `reset`
   reuses an instance for a new call.
 
-[ARCHITECTURE.md](ARCHITECTURE.md) states the full timing contract and constraints; [docs/algorithms.md](docs/algorithms.md)
-gives the equations and defaults of every stage.
+[ARCHITECTURE.md](ARCHITECTURE.md) states the full timing contract and constraints;
+[docs/algorithms.md](docs/algorithms.md) gives the equations and defaults of every stage.
 
 ## Quick Start
 
@@ -68,9 +72,27 @@ fn enhance_call(
 }
 ```
 
-`CallConfig` exposes the calibration duration and every stage parameter; invalid values are rejected by
-`CallEnhancer::new` with a `ConfigError` naming the field. Logging uses the [`log`](https://crates.io/crates/log)
-facade behind the default `log` feature and only emits a debug record when an enhancer is created; build with
+`CallConfig` exposes the calibration duration, the noise estimator, the interference setting, and every stage
+parameter; invalid values are rejected by `CallEnhancer::new` with a `ConfigError` naming the field. For example, to
+use MCRA with a shorter minimum window and no tonal transient suppression:
+
+```rust
+use std::time::Duration;
+
+use noise_oxydation::{CallConfig, CallEnhancer, ConfigError, InterferenceConfig, McraConfig, NoiseEstimatorConfig};
+
+fn mcra_enhancer() -> Result<CallEnhancer, ConfigError> {
+    CallEnhancer::new(&CallConfig {
+        calibration_duration: Duration::from_secs(3),
+        noise_estimator: NoiseEstimatorConfig::Mcra(McraConfig { window_frames: 30, ..McraConfig::default() }),
+        interference: InterferenceConfig::Disabled,
+        ..CallConfig::default()
+    })
+}
+```
+
+Logging uses the [`log`](https://crates.io/crates/log) facade behind the default `log` feature and only emits one
+debug record, naming the noise estimator and the interference setting, when an enhancer is created; build with
 `default-features = false` to remove it.
 
 ## Example: Enhance a μ-law File
@@ -105,8 +127,11 @@ cargo build --locked --workspace --release
 ```
 
 The tests include per-stage unit tests against independently derived values, a packet lifecycle test over every call
-length from 1 to 600 packets, the calibration boundary, reset equivalence, byte-identical parallel calls, and a
-counting global allocator that asserts the packet path, `drain`, and `reset` never allocate. Contributor rules are in
+length from 1 to 600 packets, the calibration boundary, and, for every noise estimator with tonal transient
+suppression on and off: packet timing, reset equivalence, bounded output, stationary-noise attenuation,
+byte-identical parallel calls, and a counting global allocator that asserts the packet path, `drain`, and `reset`
+never allocate. A sweeping-tone test checks that tonal transient suppression attenuates a foreground tone by more
+than 0.5 dB and at most its 6.02 dB limit. Contributor rules are in
 [AGENTS.md](AGENTS.md).
 
 ## License

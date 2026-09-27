@@ -57,13 +57,15 @@ documented equation and the code.
 [#L327-L336](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/interference/tonal_transient.go#L327-L336)).
 The README default table lists guard and search bins, which are hard-coded constants, but omits this parameter
 ([R/README.md#L848-L856](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L848-L856)).
+Rust exposes it as `tonal_transient.min_frequency_bin` (default 64) and documents the 2 kHz limit in
+[algorithms.md](algorithms.md#tonal-transient-suppression).
 
 ### D3. The documented minimum noise estimator has no implementation
 
 The README documents a standalone minimum noise estimator (smoothing 0.8, 50-frame window, floor 1e−12)
 ([R/README.md#L422-L465](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L422-L465)),
 but no such estimator exists at the pinned revision; minimum tracking exists only inside MCRA. Rust implements it from
-the documented equations.
+the documented equations; the window scheme is a deliberate choice (R11).
 
 ### D4. The documented pipeline package does not exist
 
@@ -79,13 +81,14 @@ The README writes `N = α_n[t,k] N + (1 − α_n[t,k]) P` without defining `α_n
 ([R/README.md#L521-L529](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L521-L529)).
 The code uses `α_d + (1 − α_d)·p[t,k]` with `α_d = 0.95`
 ([R/dsp/noise/mcra.go#L518-L536](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L520-L535)).
+Rust follows the code.
 
 ### D6. The MCRA baseline-frame example uses 10 s instead of 5 s
 
 The comment computes `10 * 8000 / 128 = 313 frames` for a 5 s duration
 ([R/dsp/noise/mcra.go#L563-L585](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L563-L585));
-`5 · 8000 / 128 = 312.5`, which the code rounds up to 313. That internal limit is never reached in the composed pipeline,
-which ends calibration after 311 frames.
+`5 · 8000 / 128 = 312.5`, which the code rounds up to 313. That internal limit is never reached in the composed
+pipeline, which ends calibration after 311 frames.
 
 ### D7. The "80 Hz cutoff" is the pole parameter, not the −3 dB frequency
 
@@ -109,6 +112,7 @@ The type comment gives `S = T·max(F, M)·(1 − H)`
 ([R/dsp/interference/tonal_transient.go#L123](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/interference/tonal_transient.go#L123)),
 while the code and README use `max(F, M, 0.35·T)`
 ([#L306-L307](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/interference/tonal_transient.go#L306-L307)).
+Rust follows the code and README, so a stationary tone keeps 0.35 of its tonal score.
 
 ### D10. The SPP stagnation clamp is not in the README equations
 
@@ -141,10 +145,10 @@ integration test exempts samples 0 and 1 for this reason
 
 ### U2. The last valid samples may be amplified after enhancement
 
-After flush, samples beyond the last full overlap come from one frame divided by `w[n]²`, which approaches `2.3e−8` near
-the frame end. Unmodified spectra reconstruct exactly, but gain-modified frames are no longer zero at their edges, so the
-division can amplify them. Confirmation: measure the peak of the last 127 output samples on enhanced real speech against
-the preceding samples.
+After flush, samples beyond the last full overlap come from one frame divided by `w[n]²`, which approaches `2.3e−8`
+near the frame end. Unmodified spectra reconstruct exactly, but gain-modified frames are no longer zero at their edges,
+so the division can amplify them. Confirmation: measure the peak of the last 127 output samples on enhanced real
+speech against the preceding samples.
 
 Rust note: with whole 160-sample packets the input length is `160p`, so the drain frame holds 128, 160, 192, or 224
 valid samples and the last valid sample sits at most at window index 223 (`w ≈ 0.15`). The near-zero weights at the
@@ -157,12 +161,13 @@ If `FinishBaseline` runs before any baseline frame (calibration shorter than one
 returns a zero noise estimate on every later frame
 ([R/dsp/noise/mcra.go#L275-L312](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L275-L312)).
 SPP-MMSE instead initializes from the first frame. Confirmation: run the reference MCRA with `FinishBaseline` before
-`Process`.
+`Process`. Rust does not reproduce this behavior (R10); the concern about the reference stays unverified.
 
 ### U4. Resets allocate
 
-The estimators, SNR, and tonal detector drop their slices on `Reset` and reallocate on the next `Process`
-in `StartBaseline` and `Reset` ([R/dsp/noise/sppmmse.go#L233-L266](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/sppmmse.go#L233-L266)).
+The noise estimators, the decision-directed SNR estimator, and the tonal detector set their slices to `nil` in `Reset`
+(and SPP-MMSE also in `StartBaseline`), then reallocate them on the next `Process`
+([R/dsp/noise/sppmmse.go#L233-L266](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/sppmmse.go#L233-L266)).
 Per-call reuse therefore allocates after initialization.
 
 ### U5. The FFT twiddle recurrence accumulates float32 rounding
@@ -193,7 +198,10 @@ See [ARCHITECTURE.md](../ARCHITECTURE.md#packet-timing-contract).
 
 ### R3. Invalid configuration is rejected
 
-Construction returns a typed error naming the invalid field instead of substituting a default (contrast U6).
+Construction returns a typed error naming the invalid field instead of substituting a default (contrast U6). This
+covers the MCRA, minimum-estimator, and tonal transient parameters too: for example, a tonal start threshold at or
+above its full threshold is rejected with `ConfigError::StartNotBelowFull`, where the reference silently restores both
+defaults ([R/dsp/interference/tonal_transient.go#L177-L196](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/interference/tonal_transient.go#L177-L196)).
 
 ### R4. One calibration clock
 
@@ -216,6 +224,68 @@ benchmark converts `Seconds() · 8000` through `float64` before truncating
 ([R/benchmark/end_to_end_benchmark_test.go#L282](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/benchmark/end_to_end_benchmark_test.go#L282)),
 which can land one sample lower for durations that are not exactly representable. The boundary frame can differ only
 when that single sample crosses a frame end; the 5 s default gives 40 000 samples in both.
+
+### R8. Noise estimator chosen per call, SPP-MMSE and tonal suppression by default
+
+The reference keeps each stage behind a replaceable component
+([R/README.md#L2220-L2233](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L2220-L2233)), and its end-to-end composition uses SPP-MMSE and
+applies the tonal transient gain after Log-MMSE
+([R/benchmark/end_to_end_benchmark_test.go#L341-L375](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/benchmark/end_to_end_benchmark_test.go#L341-L375)).
+Rust selects the estimator with the `NoiseEstimatorConfig` enum (SPP-MMSE by default, MCRA, or the minimum estimator)
+and interference suppression with the `InterferenceConfig` enum (tonal transient suppression by default, or
+disabled), dispatched statically inside the call. The MCRA and tonal detector defaults equal the reference
+`DefaultMCRAConfig` and `DefaultTonalTransientConfig`
+([R/dsp/noise/mcra.go#L59-L73](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L59-L73),
+[R/dsp/interference/tonal_transient.go#L67-L88](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/interference/tonal_transient.go#L67-L88)); the
+minimum estimator's defaults are the README's.
+
+### R9. Calibration means in `f64` for every estimator
+
+The reference SPP-MMSE accumulates its baseline in `float64`
+([R/dsp/noise/sppmmse.go#L287](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/sppmmse.go#L287)), but MCRA accumulates in `float32`
+([R/dsp/noise/mcra.go#L366-L378](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L366-L378)), whose sum can lose low-order
+bits over the 311 frames of a 5 s intro. All Rust estimators share one `f64` accumulator and narrow the floored mean to `f32`. Every
+estimator also floors observed power the same way (below the floor, NaN, and infinities become the floor); the
+reference MCRA leaves `+∞` unchanged, which cannot occur with bounded μ-law input.
+
+### R10. MCRA initializes from the first frame without calibration
+
+When no calibration frame exists, the reference MCRA never initializes and returns a zero estimate forever (U3).
+Rust initializes MCRA like its other estimators: from the first frame's floored power, followed by that frame's normal
+update, so a zero calibration duration still produces a working noise estimate. With calibration, Rust matches the
+reference: tracking starts from the calibration mean and the first enhanced frame is updated normally.
+
+### R11. The minimum estimator uses an exact sliding window
+
+The README defines the estimate as the minimum of the smoothed power "inside the configured window" without defining
+how the window advances (D3), and MCRA approximates a window minimum with two alternating blocks
+([R/dsp/noise/mcra.go#L553-L563](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L553-L563)). Rust keeps the smoothed spectra of the
+most recent `W` frames in a history allocated at construction and takes the exact minimum over them, including the
+current frame. At the first non-calibration frame every history slot holds the calibration mean (or the first frame's
+power), so the window is full from the start. MCRA keeps the reference's two-block scheme.
+
+### R12. MCRA diagnostics are not ported
+
+The reference MCRA offers `SpeechProbability`, `NoiseProbability`, and the `MinProbabilityFrequency` parameter they use
+([R/dsp/noise/mcra.go#L52](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L52),
+[#L482-L517](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L482-L517)). Only the MCRA smoke test calls them, to write diagnostic
+output ([R/smoke/mcra_smoke_test.go#L165-L166](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/smoke/mcra_smoke_test.go#L165-L166)); no processing
+composition uses them and they do not affect the noise estimate. The packet API exposes no per-frame diagnostics, so
+Rust omits them and the parameter.
+
+### R13. Tonal detector flux ratio in `f64`
+
+The reference computes the flux ratio `current / previous` in `float32` before taking the logarithm in `float64`
+([R/dsp/interference/tonal_transient.go#L613-L624](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/interference/tonal_transient.go#L613-L624)).
+Rust forms the ratio in `f64`. The two differ only by `f32` rounding; no parity is claimed.
+
+### R14. NaN output samples quantize to 0
+
+`convert::quantize_pcm16` clamps each output sample to `[−1, 1]`, scales it by 32767, and converts it with Rust's
+saturating float-to-integer cast, which maps NaN to 0. The reference converts with `int16(sample * 32767.0)`
+([R/codec/mulaw/mulaw.go#L227-L240](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/codec/mulaw/mulaw.go#L227-L240)); Go leaves the result for NaN
+implementation-specific, so it can differ by platform. NaN cannot reach the Rust encoder from valid μ-law input: every
+stage replaces non-finite intermediate values with 0 or its floor.
 
 ## Measured Parity
 

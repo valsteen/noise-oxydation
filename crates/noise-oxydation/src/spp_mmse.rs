@@ -15,7 +15,12 @@
 //! `P` and `N` are sanitized to the floor (values below it, NaN and infinities become the floor). When calibration
 //! produced no frame, the first adaptive frame initializes `N = P`.
 
-use crate::{config::SppMmseConfig, convert::narrow, geometry::BINS};
+use crate::{
+    config::SppMmseConfig,
+    convert::narrow,
+    geometry::BINS,
+    power::{CalibrationMean, sanitize},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -30,8 +35,7 @@ pub(crate) struct SppMmse {
     config: SppMmseConfig,
     noise: [f32; BINS],
     smoothed_probability: [f32; BINS],
-    calibration_sum: [f64; BINS],
-    calibration_frames: f64,
+    calibration: CalibrationMean,
     mode: Mode,
 }
 
@@ -41,8 +45,7 @@ impl SppMmse {
             config,
             noise: [0.0; BINS],
             smoothed_probability: [0.0; BINS],
-            calibration_sum: [0.0; BINS],
-            calibration_frames: 0.0,
+            calibration: CalibrationMean::new(),
             mode: Mode::Calibrating,
         }
     }
@@ -53,8 +56,8 @@ impl SppMmse {
     /// calibration for the rest of the call.
     pub(crate) fn estimate(&mut self, power: &[f32; BINS], calibration: bool) -> &[f32; BINS] {
         match (self.mode, calibration) {
-            (Mode::Calibrating, true) => self.accumulate(power),
-            (Mode::Calibrating, false) if self.calibration_frames < 1.0 => self.initialize(power),
+            (Mode::Calibrating, true) => self.calibration.accumulate(power, self.config.floor, &mut self.noise),
+            (Mode::Calibrating, false) if self.calibration.is_empty() => self.initialize(power),
             (Mode::Calibrating, false) => {
                 self.mode = Mode::Tracking;
                 self.track(power);
@@ -67,18 +70,8 @@ impl SppMmse {
     pub(crate) fn reset(&mut self) {
         self.noise.fill(0.0);
         self.smoothed_probability.fill(0.0);
-        self.calibration_sum.fill(0.0);
-        self.calibration_frames = 0.0;
+        self.calibration.reset();
         self.mode = Mode::Calibrating;
-    }
-
-    fn accumulate(&mut self, power: &[f32; BINS]) {
-        let floor = self.config.floor;
-        self.calibration_frames += 1.0;
-        for ((sum, noise), &observed) in self.calibration_sum.iter_mut().zip(&mut self.noise).zip(power) {
-            *sum += f64::from(sanitize(observed, floor));
-            *noise = sanitize(narrow(*sum / self.calibration_frames), floor);
-        }
     }
 
     fn initialize(&mut self, power: &[f32; BINS]) {
@@ -114,11 +107,6 @@ fn speech_presence_probability(config: &SppMmseConfig, gamma: f32) -> f32 {
     let likelihood_ratio = ((1.0 - prior) / prior) * (1.0 + snr) * (-f64::from(gamma) * snr / (1.0 + snr)).exp();
     let probability = 1.0 / (1.0 + likelihood_ratio);
     if probability.is_finite() { narrow(probability.clamp(0.0, 1.0)) } else { 0.0 }
-}
-
-/// Replaces values below `floor`, NaN and infinities with `floor`.
-fn sanitize(value: f32, floor: f32) -> f32 {
-    if value.is_finite() && value >= floor { value } else { floor }
 }
 
 #[cfg(test)]

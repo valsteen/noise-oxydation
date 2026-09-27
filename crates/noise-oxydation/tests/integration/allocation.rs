@@ -10,7 +10,10 @@ use std::{
     time::Duration,
 };
 
-use noise_oxydation::{CallConfig, CallEnhancer, DELAY_PACKETS, PACKET_SAMPLES, Packet};
+use noise_oxydation::{
+    CallConfig, CallEnhancer, DELAY_PACKETS, InterferenceConfig, McraConfig, MinimumConfig, NoiseEstimatorConfig,
+    PACKET_SAMPLES, Packet, SppMmseConfig, TonalTransientConfig,
+};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -125,19 +128,44 @@ fn the_counter_observes_heap_activity_on_this_thread() {
     assert!(activity.allocations >= 1 && activity.reallocations >= 1 && activity.deallocations >= 1, "{activity:?}");
 }
 
+/// Every noise estimator with interference suppression enabled and disabled; the minimum estimator's history is
+/// sized from its window at construction, so a non-default window is included too.
+fn configurations(calibration: Duration) -> Vec<CallConfig> {
+    let estimators = [
+        NoiseEstimatorConfig::SppMmse(SppMmseConfig::default()),
+        NoiseEstimatorConfig::Mcra(McraConfig::default()),
+        NoiseEstimatorConfig::Minimum(MinimumConfig::default()),
+        NoiseEstimatorConfig::Minimum(MinimumConfig { window_frames: 7, ..MinimumConfig::default() }),
+    ];
+    let interference =
+        [InterferenceConfig::TonalTransient(TonalTransientConfig::default()), InterferenceConfig::Disabled];
+    estimators
+        .into_iter()
+        .flat_map(|noise_estimator| {
+            interference.into_iter().map(move |interference| CallConfig {
+                calibration_duration: calibration,
+                noise_estimator,
+                interference,
+                ..CallConfig::default()
+            })
+        })
+        .collect()
+}
+
 #[test]
 fn packet_path_drain_and_reset_do_not_allocate() {
+    let input = packets(400);
     for calibration in [Duration::ZERO, Duration::from_secs(1), Duration::from_secs(5)] {
-        let config = CallConfig { calibration_duration: calibration, ..CallConfig::default() };
-        let input = packets(400);
-        let mut enhancer = CallEnhancer::new(&config).expect("valid config");
-        let activity = measure(|| {
-            stream_and_drain(&mut enhancer, &input);
-            enhancer.reset();
-            stream_and_drain(&mut enhancer, &input[..123]);
-            enhancer.reset();
-            stream_and_drain(&mut enhancer, &[]);
-        });
-        assert_eq!(activity, NONE, "calibration {calibration:?}");
+        for config in configurations(calibration) {
+            let mut enhancer = CallEnhancer::new(&config).expect("valid config");
+            let activity = measure(|| {
+                stream_and_drain(&mut enhancer, &input);
+                enhancer.reset();
+                stream_and_drain(&mut enhancer, &input[..123]);
+                enhancer.reset();
+                stream_and_drain(&mut enhancer, &[]);
+            });
+            assert_eq!(activity, NONE, "{:?} with {:?}", config.noise_estimator, config.interference);
+        }
     }
 }

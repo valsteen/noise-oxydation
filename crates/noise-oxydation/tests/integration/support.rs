@@ -2,7 +2,10 @@
 
 use std::{f64::consts::PI, time::Duration};
 
-use noise_oxydation::{CallConfig, CallEnhancer, DELAY_PACKETS, PACKET_SAMPLES, Packet, PacketOutcome};
+use noise_oxydation::{
+    CallConfig, CallEnhancer, DELAY_PACKETS, InterferenceConfig, McraConfig, MinimumConfig, NoiseEstimatorConfig,
+    PACKET_SAMPLES, Packet, PacketOutcome, SppMmseConfig, TonalTransientConfig,
+};
 
 /// Deterministic xorshift64* generator.
 pub struct Rng(u64);
@@ -70,6 +73,28 @@ pub fn nearest_ordinal(value: f64) -> i32 {
     if value < 0.0 { -best } else { best }
 }
 
+/// μ-law byte of the level nearest to `value`.
+pub fn encode(value: f64) -> u8 {
+    let level = nearest_ordinal(value);
+    let magnitude = u8::try_from(level.unsigned_abs()).expect("μ-law levels fit a byte");
+    let sign = if level < 0 { 0x80 } else { 0 };
+    !(sign | magnitude)
+}
+
+/// Encodes a signal into packets, padding the last packet with silence.
+pub fn encode_packets(signal: &[f64]) -> Vec<Packet> {
+    signal
+        .chunks(PACKET_SAMPLES)
+        .map(|chunk| {
+            let mut packet = [0xFF; PACKET_SAMPLES];
+            for (byte, &value) in packet.iter_mut().zip(chunk) {
+                *byte = encode(value);
+            }
+            packet
+        })
+        .collect()
+}
+
 /// Decodes packets and applies `y[n] = x[n] − x[n−1] + r·y[n−1]` with `r = exp(−2π·80/8000)` in double precision:
 /// the pass-through signal the enhancer must reproduce during calibration.
 pub fn decoded_high_passed(packets: &[Packet]) -> Vec<f64> {
@@ -115,6 +140,53 @@ pub fn run_call(enhancer: &mut CallEnhancer, packets: &[Packet]) -> CallRun {
 
 pub fn enhancer_with_calibration(duration: Duration) -> CallEnhancer {
     CallEnhancer::new(&CallConfig { calibration_duration: duration, ..CallConfig::default() }).expect("valid config")
+}
+
+/// The three noise estimators with default parameters.
+pub fn estimators() -> [NoiseEstimatorConfig; 3] {
+    [
+        NoiseEstimatorConfig::SppMmse(SppMmseConfig::default()),
+        NoiseEstimatorConfig::Mcra(McraConfig::default()),
+        NoiseEstimatorConfig::Minimum(MinimumConfig::default()),
+    ]
+}
+
+/// Interference suppression enabled with default parameters, and disabled.
+pub fn interference_settings() -> [InterferenceConfig; 2] {
+    [InterferenceConfig::TonalTransient(TonalTransientConfig::default()), InterferenceConfig::Disabled]
+}
+
+/// All six estimator and interference combinations with the given calibration duration.
+pub fn all_configurations(calibration: Duration) -> Vec<CallConfig> {
+    estimators()
+        .into_iter()
+        .flat_map(|noise_estimator| {
+            interference_settings().into_iter().map(move |interference| CallConfig {
+                calibration_duration: calibration,
+                noise_estimator,
+                interference,
+                ..CallConfig::default()
+            })
+        })
+        .collect()
+}
+
+/// Short description of a configuration's alternatives for assertion messages.
+pub fn describe(config: &CallConfig) -> String {
+    let estimator = match config.noise_estimator {
+        NoiseEstimatorConfig::SppMmse(_) => "SPP-MMSE",
+        NoiseEstimatorConfig::Mcra(_) => "MCRA",
+        NoiseEstimatorConfig::Minimum(_) => "minimum",
+    };
+    let interference = match config.interference {
+        InterferenceConfig::TonalTransient(_) => "tonal suppression",
+        InterferenceConfig::Disabled => "no interference suppression",
+    };
+    format!("{estimator} with {interference}")
+}
+
+pub fn enhancer(config: &CallConfig) -> CallEnhancer {
+    CallEnhancer::new(config).expect("valid config")
 }
 
 /// Mean energy of the decoded output bytes over `range`.

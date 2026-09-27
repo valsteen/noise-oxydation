@@ -2,16 +2,17 @@
 
 use crate::{
     analysis::Analyzer,
-    config::{CallConfig, ValidConfig},
+    config::{CallConfig, InterferenceConfig, ValidConfig},
     error::{ConfigError, StreamError},
     fft::{Complex, Fft},
     geometry::{BINS, FFT_SIZE, HOP_SIZE, PACKET_SAMPLES},
     highpass::HighPass,
     log_mmse::LogMmse,
     mulaw,
+    noise_estimator::NoiseEstimator,
     output_queue::OutputQueue,
-    spp_mmse::SppMmse,
     synthesis::Synthesizer,
+    tonal::TonalTransient,
     window::HannWindow,
 };
 
@@ -53,8 +54,9 @@ pub struct CallEnhancer {
     fft: Fft,
     high_pass: HighPass,
     analyzer: Analyzer,
-    noise: SppMmse,
+    noise: NoiseEstimator,
     suppressor: LogMmse,
+    interference: Option<TonalTransient>,
     synthesizer: Synthesizer,
     output: OutputQueue,
     spectrum: [Complex; BINS],
@@ -66,9 +68,11 @@ pub struct CallEnhancer {
 }
 
 impl CallEnhancer {
-    /// Validates `config` and initializes every piece of per-call state, all of it in fixed-size storage.
+    /// Validates `config` and initializes every piece of per-call state. This is the only allocation of the call: all
+    /// storage, including the minimum estimator's history sized from its window, is created here and reused.
     ///
-    /// With the default `log` feature this emits one debug record describing the validated configuration.
+    /// With the default `log` feature this emits one debug record naming the noise estimator and the interference
+    /// setting and describing the validated configuration.
     ///
     /// # Errors
     ///
@@ -77,7 +81,9 @@ impl CallEnhancer {
         let config = ValidConfig::new(config)?;
         #[cfg(feature = "log")]
         log::debug!(
-            "call enhancer created: {} calibration samples, configuration {:?}",
+            "call enhancer created: {} noise estimator, interference {}, {} calibration samples, configuration {:?}",
+            config.config.noise_estimator.name(),
+            config.config.interference.name(),
             config.calibration_samples,
             config.config
         );
@@ -87,8 +93,12 @@ impl CallEnhancer {
             fft: Fft::new(),
             high_pass: HighPass::new(settings.high_pass.cutoff_hz),
             analyzer: Analyzer::new(),
-            noise: SppMmse::new(settings.spp_mmse),
+            noise: NoiseEstimator::new(settings.noise_estimator),
             suppressor: LogMmse::new(settings.log_mmse, settings.decision_directed),
+            interference: match settings.interference {
+                InterferenceConfig::TonalTransient(tonal) => Some(TonalTransient::new(tonal)),
+                InterferenceConfig::Disabled => None,
+            },
             synthesizer: Synthesizer::new(),
             output: OutputQueue::new(),
             spectrum: [Complex::ZERO; BINS],
@@ -194,6 +204,9 @@ impl CallEnhancer {
         self.analyzer.reset();
         self.noise.reset();
         self.suppressor.reset();
+        if let Some(interference) = &mut self.interference {
+            interference.reset();
+        }
         self.synthesizer.reset();
         self.output.reset();
         self.frames = 0;
@@ -212,6 +225,10 @@ impl CallEnhancer {
     }
 
     /// Runs the stages of one analyzed frame held in `self.spectrum` and queues the samples it finalizes.
+    ///
+    /// Calibration frames only update the noise estimator's calibration mean and pass through. Enhanced frames run,
+    /// in order: noise estimation, tonal detection on the original power, Log-MMSE (which keeps its decision-directed
+    /// state from its own clean power), and the tonal gain on the Log-MMSE output.
     fn process_frame(&mut self) {
         for (power, bin) in self.power.iter_mut().zip(&self.spectrum) {
             *power = bin.norm_sqr();
@@ -219,7 +236,13 @@ impl CallEnhancer {
         let calibration = self.is_calibration_frame(self.frames);
         let noise = self.noise.estimate(&self.power, calibration);
         if !calibration {
+            let interference_gain = self.interference.as_mut().map(|detector| detector.process(&self.power));
             self.suppressor.apply(&mut self.spectrum, &self.power, noise);
+            if let Some(gains) = interference_gain {
+                for (bin, &gain) in self.spectrum.iter_mut().zip(gains) {
+                    *bin = bin.scale(gain.clamp(0.0, 1.0));
+                }
+            }
             if self.phase == CallPhase::Calibrating {
                 self.phase = CallPhase::Enhancing;
             }

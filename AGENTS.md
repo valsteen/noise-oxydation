@@ -6,9 +6,9 @@ Instructions for AI coding agents working in this repository.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) owns the crate map, dependency direction, per-call ownership, the packet timing
   contract, calibration, and the audio-critical constraints. Keep it current in the same change as the code.
-- [docs/reference-log.md](docs/reference-log.md) owns every difference from, or concern about, the Go behavior reference.
-  Add an entry whenever you rely on, disagree with, or diverge from reference behavior. Never claim numerical parity
-  without a measured entry.
+- [docs/reference-log.md](docs/reference-log.md) owns every difference from, or concern about, the Go behavior
+  reference. Add an entry whenever you rely on, disagree with, or diverge from reference behavior. Never claim numerical
+  parity without a measured entry.
 - [docs/algorithms.md](docs/algorithms.md) owns the implemented equations, defaults, and units. Update it with any
   algorithm or default change.
 - [docs/lint-exceptions.md](docs/lint-exceptions.md) lists every lint expectation.
@@ -50,8 +50,8 @@ because `rustfmt.toml` uses unstable options.
   ```
 
   Integration tests live under `tests/integration/`: `suite.rs` (the `integration` target) groups the packet
-  lifecycle, calibration, reset, and parallel-call tests, and `allocation.rs` (the `allocation` target) is the only
-  binary with the counting global allocator. Register a new integration target in the crate's `Cargo.toml`.
+  lifecycle, calibration, reset, parallel-call, estimator and interference alternative, and interference tests, and
+  `allocation.rs` (the `allocation` target) is the only binary with the counting global allocator. Register a new integration target in the crate's `Cargo.toml`.
 - Do not add tautological tests that restate constants or the production algorithm. Test observable behavior, failure
   handling, lifecycle, regressions, and independently derived expectations (closed-form math, reference-documented
   values).

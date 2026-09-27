@@ -25,9 +25,11 @@
 //! ```
 //!
 //! Each packet is μ-law decoded, high-pass filtered, analyzed into 256-sample Hann frames every 128 samples, and each
-//! frame's noise power is estimated with SPP-MMSE. During the quiet-intro calibration (default 5 s) frames pass
-//! through un-enhanced while the estimator learns the noise; afterwards each frame is suppressed with Log-MMSE driven
-//! by decision-directed SNR estimates, resynthesized by weighted overlap-add, and μ-law encoded.
+//! frame's noise power is estimated with the configured [`NoiseEstimatorConfig`] (SPP-MMSE by default, or MCRA or
+//! the minimum estimator). During the quiet-intro calibration (default 5 s) frames pass through un-enhanced while the
+//! estimator learns the noise; afterwards each frame is suppressed with Log-MMSE driven by decision-directed SNR
+//! estimates, then attenuated by the tonal transient detector unless [`InterferenceConfig::Disabled`] is chosen,
+//! resynthesized by weighted overlap-add, and μ-law encoded.
 #![forbid(unsafe_code)]
 
 mod analysis;
@@ -40,10 +42,15 @@ mod fft;
 mod geometry;
 mod highpass;
 mod log_mmse;
+mod mcra;
+mod minimum;
 mod mulaw;
+mod noise_estimator;
 mod output_queue;
+mod power;
 mod spp_mmse;
 mod synthesis;
+mod tonal;
 mod window;
 
 #[cfg(test)]
@@ -51,7 +58,10 @@ mod window;
 mod test_support;
 
 pub use crate::{
-    config::{CallConfig, DecisionDirectedConfig, HighPassConfig, LogMmseConfig, SppMmseConfig},
+    config::{
+        CallConfig, DecisionDirectedConfig, HighPassConfig, InterferenceConfig, LogMmseConfig, McraConfig,
+        MinimumConfig, NoiseEstimatorConfig, SppMmseConfig, TonalTransientConfig,
+    },
     enhancer::{CallEnhancer, CallPhase, DELAY_PACKETS, Packet, PacketOutcome},
     error::{ConfigError, ConfigField, Constraint, StreamError},
     geometry::{PACKET_SAMPLES, SAMPLE_RATE_HZ},

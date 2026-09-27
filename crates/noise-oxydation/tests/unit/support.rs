@@ -24,3 +24,11 @@ impl TestRng {
         narrow(self.next_signed())
     }
 }
+
+/// Asserts that two spectra are bit-for-bit identical.
+pub(crate) fn assert_same_bits(actual: &[f32], expected: &[f32], context: &str) {
+    assert_eq!(actual.len(), expected.len(), "{context}: lengths");
+    for (bin, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(actual.to_bits() == expected.to_bits(), "{context}: bin {bin}: {actual} vs {expected}");
+    }
+}
