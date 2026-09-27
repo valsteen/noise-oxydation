@@ -1,0 +1,4 @@
+/target/
+.DS_Store
+# Downloaded source audio and rendered output never enter Git.
+/audio/
