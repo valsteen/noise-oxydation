@@ -1,6 +1,45 @@
-# Go call integration
+# Try it from Go
 
-Import `github.com/valsteen/noise-oxydation/go` to process 8 kHz mono G.711 μ-law packets with the Rust pipeline. The Go package hides cgo, owns one native handle per `Call`, and serializes each call's `Process`, `Finish`, `Reset`, and `Close` methods. Separate calls can run concurrently. `Close` is safe against a concurrent `Process` and is idempotent. Keep packet processing away from a timing-sensitive Go audio callback: Go, cgo, and the OS scheduler provide no hard real-time guarantee.
+The fastest check is to replay one of your own calls through both modes. From a checkout of this repository, with Rust stable, Go 1.23+, and a C linker available, run:
+
+```sh
+sh go/try.sh /path/to/one-call.mulaw /tmp/noise-try-001
+```
+
+The input is **raw, concatenated 160-byte G.711 μ-law packets** from one 8 kHz mono call: base64 decode any transport payload first, then append each packet in arrival order. Do not include JSON, RTP headers, or a WAV header. Capture from the start of the call; the default first five seconds must be quiet enough to learn noise. The output directory must not already exist. The command builds the Rust static library, links the Go example, and writes `conservative.mulaw` and `experimental.mulaw` with exactly the input's valid sample count. Feed either result into your existing μ-law playback or transport path to compare. If FFmpeg is already installed, `ffmpeg -f mulaw -ar 8000 -ac 1 -i /tmp/noise-try-001/conservative.mulaw /tmp/noise-try-001/conservative.wav` makes a WAV for listening; the project does not require FFmpeg.
+
+This is a local trial, not a claim of source compatibility. The [pinned Go reference](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/processor.go) exports `dsp.Processor` with `Process([]float32) ([]float32, error)` and `Reset()`. Its README sketches a complete `pipeline.New`, but that package is absent from the pinned source. Your colleague's application decides where those stages are assembled. The two paths below cover the usual PCM call loop and the more efficient μ-law packet boundary; the exact edit depends on that call site.
+
+## Closest swap: 160 normalized PCM samples
+
+If the existing Go call loop already gives the enhancement pipeline **160 normalized `float32` samples per call**, replace the construction of the whole enhancement chain with `noise.NewPCMProcessor`. The adapter implements the reference `dsp.Processor` method shape, so the processing call remains `processor.Process(input)`. Remove the old enhancement stages from that call to avoid processing the audio twice. Add `Finish` at call end to recover delayed samples, and `Close` to release the native handle:
+
+```go
+import noise "github.com/valsteen/noise-oxydation/go"
+
+config := noise.DefaultConfig() // conservative
+processor, err := noise.NewPCMProcessor(config)
+if err != nil { return err }
+defer processor.Close()
+
+// Inside the existing call loop, where pcm160 is one []float32 packet:
+enhanced, err := processor.Process(pcm160)
+if err != nil { return err }
+if err := sendEnhancedPCM(enhanced); err != nil { return err }
+
+// At the existing end-of-call point:
+tail, err := processor.Finish()
+if err != nil { return err }
+if err := sendEnhancedPCM(tail); err != nil { return err }
+```
+
+`pcm160` and `sendEnhancedPCM` are your application's existing packet and consumer. `Process` returns an owned slice containing zero, 160, or 320 samples; treat successive results and the tail as one ordered audio stream. For the experimental mode, set `config.Mode = noise.ExperimentalLowDelay` before construction. `Reset()` keeps the chosen mode and satisfies the original interface. This route converts normalized PCM to μ-law and back and allocates an owned output slice, so it is a compatibility path. It accepts exactly 160 samples per call and is not a drop-in for a differently sized or non-telephony PCM stream.
+
+## Faster swap: keep the μ-law packet boundary
+
+If the application has the **160 decoded μ-law bytes before it converts them to PCM**, call `noise.New(config)` there. Pass one packet to `Call.Process`, then send every returned packet in order using the last packet's `FinalValid` count. Call `Finish` once when the stream ends and send its returned packets too. This keeps Go-side μ-law conversion and output-slice allocation out of the packet loop. The runnable [`cmd/replay` example](cmd/replay/main.go) shows the complete batch handling and both `-mode` values. The [mode comparison](../docs/processing-modes.md) documents the experimental quality and CPU tradeoff. Neither mode promises hard real-time Go scheduling.
+
+Import `github.com/valsteen/noise-oxydation/go` for either path. The Go package hides cgo, owns one native handle per `Call`, and serializes each call's `Process`, `Finish`, `Reset`, and `Close` methods. Separate calls can run concurrently. `Close` is safe against a concurrent `Process` and is idempotent. Keep packet processing away from a timing-sensitive Go audio callback: Go, cgo, and the OS scheduler provide no hard real-time guarantee.
 
 ## Build and link
 
@@ -28,11 +67,10 @@ export CGO_LDFLAGS="$NOISE_ROOT/target/release/libnoise_oxydation_ffi.a -ldl -lp
 
 The native archive must be passed through `CGO_LDFLAGS` for **every** Go build, test, or run that imports the package. If cross-compiling, build the Rust archive for the target and supply a matching C linker.
 
-To verify import and link from a separate local Go module without fetching this unpublished module, run `sh go/integration.sh` from the repository root. It creates a temporary external consumer, adds a local Go module replacement, runs that consumer, and runs the replay command on a deterministic packet-aligned stream. To use the package in another local module manually:
+To verify import and link from a separate local Go module without fetching this unpublished module, run `sh go/integration.sh` from the repository root. It creates a temporary external consumer, tests both Go APIs and both modes, then runs the replay command on a deterministic packet-aligned stream. In your existing Go application's module, add the local replacement:
 
 ```sh
-mkdir -p /tmp/noise-consumer && cd /tmp/noise-consumer
-go mod init example.com/noise-consumer
+cd /path/to/your-go-app
 go mod edit -require=github.com/valsteen/noise-oxydation/go@v0.0.0
 go mod edit -replace=github.com/valsteen/noise-oxydation/go="$NOISE_ROOT/go"
 ```
