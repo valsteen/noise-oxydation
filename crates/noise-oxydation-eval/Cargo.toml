@@ -1,0 +1,26 @@
+[package]
+name = "noise-oxydation-eval"
+version = "0.1.0"
+description = "Offline evaluation of noise-oxydation: real-speech replay, output comparison and packet benchmarks"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "noise_oxydation_eval"
+
+[[bin]]
+name = "noise-oxydation-eval"
+path = "src/main.rs"
+
+[features]
+# Forwards the library's per-call stage timing so that `bench` reports a per-stage breakdown.
+stage-timing = ["noise-oxydation/stage-timing"]
+
+[dependencies]
+hound = "3.5"
+noise-oxydation = { path = "../noise-oxydation" }
+
+[lints]
+workspace = true

@@ -7,8 +7,9 @@ returns an enhanced packet after a fixed 40 ms delay, without allocating memory 
 It is an independently written port of the Go project
 [sghaida/noise-cancelation](https://github.com/sghaida/noise-cancelation), used as a behavior reference at commit
 [`cfc7520`](https://github.com/sghaida/noise-cancelation/tree/cfc7520a0625da90e4ad4699541a6ffe98e7c637). No Go code is
-copied; every known difference from the reference is recorded in [docs/reference-log.md](docs/reference-log.md), and no
-numerical parity with it is claimed yet.
+copied; every known difference from the reference is recorded in [docs/reference-log.md](docs/reference-log.md), which
+also holds the measured numeric comparison: on the evaluation recordings, with SPP-MMSE and MCRA, more than
+99.998 % of the output bytes are identical to the reference's.
 
 ## Status
 
@@ -22,8 +23,8 @@ Each call can instead estimate noise with MCRA or with the simple minimum estima
 suppression off. Tonal transient suppression attenuates narrow tones such as beeps and whistles between 2 and 4 kHz
 by up to about 6 dB, while sparing peaks with harmonic support (voiced speech).
 
-Still to come: a real-speech evaluation with quality metrics, latency measurements, and an illustrated guide. Until
-the evaluation exists, enhancement quality on real speech has not been measured.
+Enhancement quality on real speech and packet-path performance are measured; see
+[Evaluation and Performance](#evaluation-and-performance). An illustrated guide is still to come.
 
 ## How a Call Works
 
@@ -93,7 +94,8 @@ fn mcra_enhancer() -> Result<CallEnhancer, ConfigError> {
 
 Logging uses the [`log`](https://crates.io/crates/log) facade behind the default `log` feature and only emits one
 debug record, naming the noise estimator and the interference setting, when an enhancer is created; build with
-`default-features = false` to remove it.
+`default-features = false` to remove it. The opt-in `stage-timing` feature makes each call count and time its
+processing stages without allocating; read the totals with `CallEnhancer::stage_timings`.
 
 ## Example: Enhance a μ-law File
 
@@ -113,6 +115,28 @@ cargo run --locked --release -p noise-oxydation --example enhance_mulaw -- targe
 
 This reports 3000 input and 3000 output packets and writes a 480 000-byte file.
 
+## Evaluation and Performance
+
+The `noise-oxydation-eval` tool replays real recorded speech (Open Speech Repository) mixed with real office and
+cafeteria noise (DEMAND) at 5 dB SNR through `CallEnhancer`, packet by packet, and writes WAV files to listen to plus
+objective metrics. With the default settings the enhancer removes about 26 dB of office noise and 11 dB of cafeteria
+noise in speech pauses and improves segmental SNR by 5.2 and 2.7 dB, while speech loses 0.3 and 1.4 dB of level.
+[docs/evaluation.md](docs/evaluation.md) has every scenario and estimator, the effect of speech during calibration, and
+the measurement limits.
+
+On an Apple M1 Ultra a packet takes about 17 µs on average (p99.9 under 0.09 ms) against its 20 ms cadence, the
+packet path never allocates, a call holds 18–44 KB, and 100 concurrent calls of 120 s finish in about 0.6–0.7 s,
+3–4 times faster than the Go reference on the same machine and audio. [docs/performance.md](docs/performance.md) has
+the method, the Go comparison, the stage breakdown and the vectorization investigation.
+
+The evidence runs download audio into the Git-ignored `audio/` directory and are not part of CI:
+
+```bash
+scripts/fetch-evaluation-audio.sh
+cargo run --locked --release -p noise-oxydation-eval -- replay
+cargo run --locked --release -p noise-oxydation-eval -- bench
+```
+
 ## Development
 
 The toolchain is pinned to Rust 1.98.1 in `rust-toolchain.toml`; formatting uses the pinned nightly rustfmt because
@@ -130,9 +154,10 @@ The tests include per-stage unit tests against independently derived values, a p
 length from 1 to 600 packets, the calibration boundary, and, for every noise estimator with tonal transient
 suppression on and off: packet timing, reset equivalence, bounded output, stationary-noise attenuation,
 byte-identical parallel calls, and a counting global allocator that asserts the packet path, `drain`, and `reset`
-never allocate. A sweeping-tone test checks that tonal transient suppression attenuates a foreground tone by more
-than 0.5 dB and at most its 6.02 dB limit. Contributor rules are in
-[AGENTS.md](AGENTS.md).
+never allocate, with and without the `stage-timing` feature. A sweeping-tone test checks that tonal transient
+suppression attenuates a foreground tone by more than 0.5 dB and at most its 6.02 dB limit. The evaluation crate's
+unit tests cover its file handling, resampler, scenario mixing, metrics and comparison statistics. Contributor rules
+are in [AGENTS.md](AGENTS.md).
 
 ## License
 

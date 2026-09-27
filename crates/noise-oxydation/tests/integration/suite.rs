@@ -6,4 +6,6 @@ mod interference;
 mod lifecycle;
 mod parallel;
 mod reset;
+#[cfg(feature = "stage-timing")]
+mod stage_timing;
 mod support;

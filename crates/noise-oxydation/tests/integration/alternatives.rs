@@ -52,8 +52,8 @@ fn every_combination_resets_to_a_fresh_instance() {
 
 /// Noise whose level jumps for a second exercises tracking in both directions. No enhanced packet has more than twice
 /// the pass-through energy of its neighborhood (overlap-add smears level changes across packet edges, but gains never
-/// exceed 1), and no packet collapses to digital silence: gains are at least `0.05 · 0.5`, so a non-finite gain (which quantizes to 0) would show up as a
-/// silent packet.
+/// exceed 1), and no packet collapses to digital silence: gains are at least `0.05 · 0.5`, so a non-finite gain (which
+/// quantizes to 0) would show up as a silent packet.
 #[test]
 fn every_combination_produces_bounded_non_silent_output() {
     let quiet = noise_packets(200, 41, 40);

@@ -16,13 +16,22 @@ Crates are grouped by dependency surface first, then by coherent responsibility.
 | Crate | Role | Dependencies | Status |
 | --- | --- | --- | --- |
 | `crates/noise-oxydation` | Library: μ-law codec, high-pass filter, STFT/ISTFT, noise estimators, decision-directed SNR, Log-MMSE, tonal transient suppression, and the per-call `CallEnhancer` | `std`; optional `log` facade | Complete documented processing path implemented: SPP-MMSE, MCRA, and minimum noise estimators, decision-directed SNR, Log-MMSE, tonal transient suppression |
-| `crates/noise-oxydation-eval` | Offline evaluation workflow: real-speech replay, quality metrics, packet latency and allocation measurement | `noise-oxydation`, focused WAV I/O | Planned (audio and performance evidence) |
+| `crates/noise-oxydation-eval` | Offline evaluation binary `noise-oxydation-eval`: real-speech replay with quality metrics, byte comparison of μ-law outputs, and packet latency, allocation, memory and throughput benchmarks | `noise-oxydation`, `hound` (WAV I/O) | Implemented: `replay`, `compare`, `bench` ([docs/evaluation.md](docs/evaluation.md), [docs/performance.md](docs/performance.md)) |
 | `crates/how-it-works` | Project-owned renderer for `HOW_IT_WORKS.md` diagrams in day and night palettes, with a freshness check | `std` only | Planned (visual guide) |
+
+Outside the Cargo workspace, [`tools/go-parity`](tools/go-parity/main.go) is a Go module that drives the pinned Go
+reference as a dependency for parity, timing and reference-concern measurements. It is an evidence tool: nothing in
+the workspace depends on it, and CI does not run it.
+
+The evaluation crate is split into a library, which holds every workflow and forbids `unsafe` code, and a thin binary
+that adds the allocation-counting global allocator (see [Audio-Critical Constraints](#audio-critical-constraints)).
+Its `stage-timing` feature forwards to the library's feature so that `bench` can print the stage breakdown.
 
 The library's public API is the per-call packet interface: `CallEnhancer` (`new`, `process_packet`, `drain`,
 `reset`, `phase`, `config`), `Packet` (`[u8; 160]`), `PacketOutcome`, `CallPhase`, `CallConfig` with its per-stage
 parameter structs and the `NoiseEstimatorConfig` and `InterferenceConfig` choices, and the typed errors `ConfigError`
-and `StreamError`. Stages are private modules of the one crate:
+and `StreamError`. With the `stage-timing` feature it adds `CallEnhancer::stage_timings` and the `Stage`,
+`StageTiming` and `StageTimings` types. Stages are private modules of the one crate:
 
 | Module | Responsibility |
 | --- | --- |
@@ -36,6 +45,7 @@ and `StreamError`. Stages are private modules of the one crate:
 | `decision_directed`, `log_mmse` | A priori SNR estimation; Log-MMSE gain and the exponential integral |
 | `tonal` | Tonal transient detector: per-bin interference gains applied after Log-MMSE |
 | `output_queue` | Bounded FIFO of finalized encoded samples with exact sample accounting |
+| `stage_timing` | Opt-in per-call stage accumulators; zero-sized without the `stage-timing` feature |
 | `convert` | The audited lossy numeric conversions |
 | `geometry` | The fixed telephony constants |
 
@@ -71,8 +81,8 @@ rejected with typed errors; they are never silently replaced by defaults.
 `CallEnhancer` is the composition root for one call. It exclusively owns every piece of temporal state for that call:
 high-pass filter memory, the analysis input buffer, the window, FFT scratch and twiddles, the noise estimator's state
 (SPP-MMSE, MCRA, or the minimum estimator), decision-directed SNR history, Log-MMSE scratch, the tonal transient
-detector's previous power and gains, the synthesis overlap buffers, the calibration clock, and the encoded output
-queue.
+detector's previous power and gains, the synthesis overlap buffers, the calibration clock, the encoded output
+queue, and, with the `stage-timing` feature, the call's stage timing accumulators.
 
 The chosen noise estimator is an enum and the tonal detector an optional field inside the instance, so every stage is
 dispatched statically: no trait objects, no shared tables. Storage is fixed-size arrays inside the instance, with two
@@ -89,6 +99,9 @@ optional `log` facade keeps its own process-wide logger registration; the librar
   call. `CallEnhancer` is `Send` (it may move between threads between calls to its methods) and its mutating methods
   take `&mut self`, so the compiler rejects concurrent use of one instance. An integration test runs several calls on
   parallel threads and checks their output is byte-identical to sequential processing.
+- Stage timings are per-call state too. A tool that wants totals across concurrent calls reads each call's
+  `StageTimings` snapshot and adds them up itself after its call threads have finished, as `noise-oxydation-eval bench`
+  does.
 - There is no cross-thread boundary inside the library, so it uses no atomics or locks. If a future feature adds one
   (for example publishing statistics to a monitoring thread), values that must be observed together are published as
   one coherent snapshot, never as independently updated atomics.
@@ -134,9 +147,12 @@ duration is 5 s and is configurable (zero disables calibration).
   When the duration is shorter than one frame (256 samples), no calibration frame exists and the phase starts as
   `Enhancing`; the estimator then initializes from the first frame.
 - Speech during calibration is passed through un-enhanced, and it is learned as noise. The inflated noise estimate
-  over-suppresses speech bands right after calibration until the adaptive estimator tracks back down. The recovery time
-  depends on the estimator; it has not been measured yet and will be measured in the planned evaluation evidence rather
-  than assumed.
+  over-suppresses speech bands right after calibration until the adaptive estimator tracks back down. The replay
+  measured the recovery by enhancing the same speech and noise with the talker starting at 0 s and at 6 s
+  ([docs/evaluation.md](docs/evaluation.md#speech-during-calibration)). With 5 dB SNR office noise, the first second
+  after calibration was up to 1.1 dB (SPP-MMSE), 2.1 dB (minimum estimator) and 5.1 dB (MCRA) quieter than in the
+  undisturbed call. The speech level matched the undisturbed call within 1 dB from 1 s after calibration for SPP-MMSE
+  and the minimum estimator, and from 3 s for MCRA. Louder or longer speech in the intro can take longer.
 
 ## Audio-Critical Constraints
 
@@ -150,29 +166,42 @@ duration is 5 s and is configurable (zero disables calibration).
 
 Construction (`CallEnhancer::new`) is the only place that may allocate or log. Integration tests enforce the allocation
 claim with a per-thread counting global allocator for every estimator with interference suppression enabled and
-disabled, the lifecycle claim with sample-exact accounting, and the concurrency claim by running independent calls with
-mixed configurations on parallel threads and comparing their output with sequential runs.
+disabled, in builds with and without the `stage-timing` feature, the lifecycle claim with sample-exact accounting, and
+the concurrency claim by running independent calls with mixed configurations on parallel threads and comparing their
+output with sequential runs. `noise-oxydation-eval bench` repeats the allocation check in release builds on real audio
+and measures latency against the 20 ms cadence ([docs/performance.md](docs/performance.md)).
 
-The library crate forbids `unsafe` code (`#![forbid(unsafe_code)]`). The only `unsafe` in the workspace is the
-allocation-counting `GlobalAlloc` test harness, which delegates to `std::alloc::System`.
+The library crate forbids `unsafe` code (`#![forbid(unsafe_code)]`), and so does the evaluation crate's library. The
+workspace contains exactly two `unsafe` sites, both allocation-counting `GlobalAlloc` implementations that delegate
+every call to `std::alloc::System` and count per thread: the library's `allocation` test harness and the
+`noise-oxydation-eval` binary (`crates/noise-oxydation-eval/src/main.rs`). No vectorization or other optimization may
+add `unsafe` to the library; the vectorization investigation adopted no explicit SIMD.
 
 ## Observability
 
 - Logging uses the `log` facade behind the default `log` Cargo feature. The library emits one debug record only from
   construction (`CallEnhancer::new`), naming the noise estimator and the interference setting, which is initialization
-  rather than the packet path; `process_packet`, `drain`,
-  and `reset` never log and report lifecycle facts through their return values and `phase()`. Disable at compile time
-  with `default-features = false` or at runtime by installing no logger or filtering the level. Applications and tools
-  log their own call-level events.
-- Opt-in performance analysis is planned as a Cargo feature that accumulates per-stage timings inside the call without
-  allocation. Heavier tracing (for example `minitrace`) is adopted only if measurements show the per-stage accounting
-  is insufficient.
+  rather than the packet path; `process_packet`, `drain`, and `reset` never log and report lifecycle facts through their
+  return values and `phase()`. Disable at compile time with `default-features = false` or at runtime by installing no
+  logger or filtering the level. Applications and tools log their own call-level events; the evaluation tool prints
+  plain reports to stdout.
+- The `stage-timing` Cargo feature (off by default) is the opt-in performance analysis. Each call accumulates, per
+  stage, the invocation count and the total and maximum duration, read with `CallEnhancer::stage_timings` as a `Copy`
+  snapshot and cleared by `reset`. The stages are decode and high-pass, analysis, noise estimation, tonal detection,
+  Log-MMSE (including applying the tonal gains), synthesis, and encode and queue. The call reads `Instant::now` at
+  stage boundaries and adds to fixed accumulators: no allocation, locks, atomics or I/O. Measured overhead is 1–3 % of
+  packet time, and the enhanced output is byte-identical with and without the feature. Without the feature the clock
+  is zero-sized and never reads the time.
+- `minitrace` is not adopted. Per-stage accounting located the cost (Log-MMSE takes about two thirds of packet time),
+  and a tracing framework would add a dependency and a process-wide collector without answering a further question
+  ([docs/performance.md](docs/performance.md#minitrace-decision)).
 
 ## Numeric Conversions
 
 Clippy pedantic runs with warnings as errors. Lossy numeric conversions that cannot be expressed with a lossless std
-conversion (f64 → f32 narrowing, float → PCM16 quantization) are confined to one audited conversion module
-(`crates/noise-oxydation/src/convert.rs`). Every lint expectation is narrow, carries a `reason`, and is listed in
+conversion (f64 → f32 narrowing, float → PCM16 quantization) are confined to one audited conversion module per crate:
+`crates/noise-oxydation/src/convert.rs` in the library and `crates/noise-oxydation-eval/src/convert.rs` in the
+evaluation crate. Every lint expectation is narrow, carries a `reason`, and is listed in
 [docs/lint-exceptions.md](docs/lint-exceptions.md).
 
 ## Limitations
@@ -183,4 +212,5 @@ conversion (f64 → f32 narrowing, float → PCM16 quantization) are confined to
 - Tonal transient suppression analyzes only bins at or above `min_frequency_bin` (2 kHz by default) and attenuates by
   at most `min_gain` (−6.02 dB by default): tones below that bin pass as foreground, and louder tones are reduced
   rather than removed.
-- Calibration assumes a quiet intro; speech during calibration degrades early enhancement as described above.
+- Calibration assumes a quiet intro; speech during calibration degrades early enhancement for the measured 1–3 s
+  described above.

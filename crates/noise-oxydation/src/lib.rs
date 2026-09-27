@@ -30,6 +30,13 @@
 //! estimator learns the noise; afterwards each frame is suppressed with Log-MMSE driven by decision-directed SNR
 //! estimates, then attenuated by the tonal transient detector unless [`InterferenceConfig::Disabled`] is chosen,
 //! resynthesized by weighted overlap-add, and μ-law encoded.
+//!
+//! # Features
+//!
+//! - `log` (default): one debug record from [`CallEnhancer::new`] through the `log` facade. The packet path never logs.
+//! - `stage-timing` (off by default): each call accumulates per-stage invocation counts, total and maximum durations,
+//!   read with `CallEnhancer::stage_timings`. It reads `Instant::now` once per stage boundary and adds no allocation,
+//!   locks, atomics or I/O; the enhanced output is unchanged.
 #![forbid(unsafe_code)]
 
 mod analysis;
@@ -49,6 +56,7 @@ mod noise_estimator;
 mod output_queue;
 mod power;
 mod spp_mmse;
+mod stage_timing;
 mod synthesis;
 mod tonal;
 mod window;
@@ -57,6 +65,8 @@ mod window;
 #[path = "../tests/unit/support.rs"]
 mod test_support;
 
+#[cfg(feature = "stage-timing")]
+pub use crate::stage_timing::{Stage, StageTiming, StageTimings};
 pub use crate::{
     config::{
         CallConfig, DecisionDirectedConfig, HighPassConfig, InterferenceConfig, LogMmseConfig, McraConfig,

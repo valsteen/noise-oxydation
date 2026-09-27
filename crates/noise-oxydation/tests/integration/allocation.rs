@@ -1,7 +1,8 @@
 //! `process_packet`, `drain` and `reset` never touch the heap after construction.
 //!
 //! This test binary installs a counting global allocator. Counters are per thread and each test measures only its
-//! own thread, so tests running in parallel do not disturb each other.
+//! own thread, so tests running in parallel do not disturb each other. The gates run it with `--all-features`, which
+//! includes the `stage-timing` feature, and CI also runs it without optional features.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -116,6 +117,9 @@ fn stream_and_drain(enhancer: &mut CallEnhancer, input: &[Packet]) {
     let mut tail = [[0; PACKET_SAMPLES]; DELAY_PACKETS];
     assert!(enhancer.drain(&mut tail).is_ok());
     black_box(&tail);
+    // With the `stage-timing` feature the packet path also accumulates stage timings, and reading them is a copy.
+    #[cfg(feature = "stage-timing")]
+    black_box(enhancer.stage_timings());
 }
 
 #[test]

@@ -11,6 +11,7 @@ use crate::{
     mulaw,
     noise_estimator::NoiseEstimator,
     output_queue::OutputQueue,
+    stage_timing::{Mark, Stage, StageClock},
     synthesis::Synthesizer,
     tonal::TonalTransient,
     window::HannWindow,
@@ -65,6 +66,7 @@ pub struct CallEnhancer {
     frames: u64,
     packets_in: u64,
     phase: CallPhase,
+    clock: StageClock,
 }
 
 impl CallEnhancer {
@@ -107,6 +109,7 @@ impl CallEnhancer {
             frames: 0,
             packets_in: 0,
             phase: CallPhase::Calibrating,
+            clock: StageClock::default(),
             config,
         };
         enhancer.phase = enhancer.initial_phase();
@@ -125,6 +128,14 @@ impl CallEnhancer {
         self.phase
     }
 
+    /// Per-stage invocation counts, total and maximum durations accumulated by this call since construction or the
+    /// last [`reset`](Self::reset). Only available with the `stage-timing` feature.
+    #[cfg(feature = "stage-timing")]
+    #[must_use]
+    pub fn stage_timings(&self) -> crate::StageTimings {
+        self.clock.snapshot()
+    }
+
     /// Consumes one input packet and, after the first two packets of a call, writes one enhanced output packet.
     ///
     /// Output packet *n* carries the enhanced samples of input packet *n − 2*. `output` is left untouched when the
@@ -137,11 +148,13 @@ impl CallEnhancer {
         if self.phase == CallPhase::Drained {
             return Err(StreamError::Drained);
         }
+        let start = StageClock::mark();
         let mut samples = [0.0; PACKET_SAMPLES];
         for (sample, &byte) in samples.iter_mut().zip(input) {
             *sample = mulaw::decode_sample(byte);
         }
         self.high_pass.process(&mut samples);
+        self.clock.record(Stage::DecodeHighPass, start);
         self.packets_in += 1;
         self.output.receive_packet();
 
@@ -150,8 +163,9 @@ impl CallEnhancer {
             let consumed = self.analyzer.push(pending);
             pending = &pending[consumed..];
             if self.analyzer.frame_ready() {
+                let start = StageClock::mark();
                 self.analyzer.analyze(&self.window, &self.fft, &mut self.spectrum);
-                self.process_frame();
+                self.process_frame(start);
             }
         }
 
@@ -177,12 +191,16 @@ impl CallEnhancer {
         if self.phase == CallPhase::Drained {
             return Err(StreamError::Drained);
         }
+        let start = StageClock::mark();
         if self.analyzer.analyze_remainder(&self.window, &self.fft, &mut self.spectrum) {
-            self.process_frame();
+            self.process_frame(start);
         }
+        let start = StageClock::mark();
         let mut tail = [0.0; FFT_SIZE - HOP_SIZE];
         if self.synthesizer.finish(&mut tail) {
+            let start = self.clock.record(Stage::Synthesis, start);
             self.output.finalize(&tail);
+            self.clock.record(Stage::EncodeQueue, start);
         }
         self.phase = CallPhase::Drained;
 
@@ -209,6 +227,7 @@ impl CallEnhancer {
         }
         self.synthesizer.reset();
         self.output.reset();
+        self.clock.reset();
         self.frames = 0;
         self.packets_in = 0;
         self.phase = self.initial_phase();
@@ -224,31 +243,40 @@ impl CallEnhancer {
         frame.saturating_mul(HOP_SIZE as u64).saturating_add(FFT_SIZE as u64) <= self.config.calibration_samples
     }
 
-    /// Runs the stages of one analyzed frame held in `self.spectrum` and queues the samples it finalizes.
+    /// Runs the stages of one analyzed frame held in `self.spectrum` and queues the samples it finalizes. `start`
+    /// marks the beginning of the frame's analysis.
     ///
     /// Calibration frames only update the noise estimator's calibration mean and pass through. Enhanced frames run,
     /// in order: noise estimation, tonal detection on the original power, Log-MMSE (which keeps its decision-directed
     /// state from its own clean power), and the tonal gain on the Log-MMSE output.
-    fn process_frame(&mut self) {
+    fn process_frame(&mut self, start: Mark) {
         for (power, bin) in self.power.iter_mut().zip(&self.spectrum) {
             *power = bin.norm_sqr();
         }
+        let start = self.clock.record(Stage::Analysis, start);
         let calibration = self.is_calibration_frame(self.frames);
         let noise = self.noise.estimate(&self.power, calibration);
+        let mut start = self.clock.record(Stage::NoiseEstimation, start);
         if !calibration {
             let interference_gain = self.interference.as_mut().map(|detector| detector.process(&self.power));
+            if interference_gain.is_some() {
+                start = self.clock.record(Stage::TonalDetection, start);
+            }
             self.suppressor.apply(&mut self.spectrum, &self.power, noise);
             if let Some(gains) = interference_gain {
                 for (bin, &gain) in self.spectrum.iter_mut().zip(gains) {
                     *bin = bin.scale(gain.clamp(0.0, 1.0));
                 }
             }
+            start = self.clock.record(Stage::LogMmse, start);
             if self.phase == CallPhase::Calibrating {
                 self.phase = CallPhase::Enhancing;
             }
         }
         self.synthesizer.synthesize(&self.window, &self.fft, &self.spectrum, &mut self.frame_output);
+        let start = self.clock.record(Stage::Synthesis, start);
         self.frames += 1;
         self.output.finalize(&self.frame_output);
+        self.clock.record(Stage::EncodeQueue, start);
     }
 }

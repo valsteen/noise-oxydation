@@ -8,8 +8,8 @@ Classes:
 
 - **Confirmed documentation problem**: the reference documentation disagrees with its own code or with mathematics
   that this project verified. The verification is stated.
-- **Unverified implementation concern**: possible reference bug or quality issue that has not been demonstrated by
-  running the reference. The entry states what would confirm or dismiss it.
+- **Implementation concern**: possible reference bug or quality issue. Each entry states whether running the reference
+  confirmed or dismissed it, with the evidence, or, while it is unverified, what would confirm or dismiss it.
 - **Deliberate Rust choice**: a place where this implementation intentionally behaves differently or narrows scope.
 - **Measured parity**: a numeric comparison with the reference that was actually run. No parity claim exists without
   an entry here.
@@ -127,14 +127,26 @@ The README says flush "returns the final PCM samples"
 ([R/README.md#L1681-L1711](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/README.md#L1681-L1711));
 as shown above it returns up to 128 samples of analysis padding beyond the input end, which every caller trims.
 
-## Unverified Implementation Concerns
+## Implementation Concerns
+
+U1 and U3 are confirmed and U2 was not observed, all by running the reference through `tools/go-parity` (see
+[Measured Parity](#measured-parity) for the harness, machine and toolchains). U4–U6 remain unverified.
 
 ### U1. The first output sample of every stream is zero
 
-The symmetric Hann window is zero at `n = 0` and no earlier frame overlaps sample 0, so its squared-window weight is 0
-and the synthesizer emits 0 ([R/dsp/stft/istft.go#L98-L106](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/stft/istft.go#L98-L106)).
+**Status: confirmed.** The symmetric Hann window is zero at `n = 0` and no earlier frame overlaps sample 0, so its
+squared-window weight is 0 and the synthesizer emits 0
+([R/dsp/stft/istft.go#L98-L106](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/stft/istft.go#L98-L106)).
 Samples 1–127 are reconstructed from a single frame. The effect is inaudible in the quiet intro, but it is a lost input
-sample. Confirmation: run the reference on an impulse at sample 0.
+sample.
+
+Evidence: `go run . u1 -write-input <file>` in `tools/go-parity` feeds 50 packets holding the full-scale impulse `0x80`
+(+32124) at sample 0 and μ-law silence elsewhere through the reference composition. Output sample 0 decodes to 0;
+samples 1–3 decode to −1980, −1820 and −1756, the high-pass filter's response to the impulse. The Rust `enhance_mulaw`
+example produces the same 8000 bytes (`noise-oxydation-eval compare`: 100 % identical).
+
+Rust keeps this behavior. It follows from the analysis grid the port mirrors exactly (R2), changing it would break the
+measured parity, and the lost sample falls in the quiet intro.
 
 Observed in the Rust implementation, which keeps the reference grid: sample 0 is always emitted as 0, and sample 1 is
 divided by its single-frame squared-window weight `w[1]² ≈ 2.3e−8`, so the `f32` FFT rounding in that frame is
@@ -145,23 +157,39 @@ integration test exempts samples 0 and 1 for this reason
 
 ### U2. The last valid samples may be amplified after enhancement
 
-After flush, samples beyond the last full overlap come from one frame divided by `w[n]²`, which approaches `2.3e−8`
-near the frame end. Unmodified spectra reconstruct exactly, but gain-modified frames are no longer zero at their edges,
-so the division can amplify them. Confirmation: measure the peak of the last 127 output samples on enhanced real
-speech against the preceding samples.
+**Status: not observed on enhanced real speech in either implementation.** After flush, samples beyond the last full
+overlap come from one frame divided by `w[n]²`, which approaches `2.3e−8` near the frame end. Unmodified spectra
+reconstruct exactly, but gain-modified frames are no longer zero at their edges, so the division could amplify them.
 
-Rust note: with whole 160-sample packets the input length is `160p`, so the drain frame holds 128, 160, 192, or 224
-valid samples and the last valid sample sits at most at window index 223 (`w ≈ 0.15`). The near-zero weights at the
-very end of the frame only affect analysis padding, which Rust never emits. Enhanced frames can still be amplified
-near that end by up to `1/w`; the measurement above remains planned.
+With whole 160-sample packets the input length is `160p`, so the drain frame holds 128, 160, 192, or 224 valid samples
+and the last valid sample sits at most at window index 223 (`w ≈ 0.15`). The near-zero weights at the very end of the
+frame only affect analysis padding, which both the reference compositions (by trimming) and Rust (by never emitting
+it) discard. The bound on amplification of the emitted samples is therefore `1/w ≈ 6.7` (16.5 dB).
+
+Evidence: the `office-5db` noisy input of the [replay](evaluation.md) was cut after 400, 520, …, 2560 and 2640 packets
+(20 cuts spread over the call). Each cut was enhanced as a complete call by the Rust `enhance_mulaw` example
+(SPP-MMSE with tonal suppression) and by `go run . enhance` (the same composition in the reference). For each
+implementation, `noise-oxydation-eval compare` then compared the last 127 samples of the cut call with the same samples
+of the uninterrupted call. The drained tail's peak never exceeded the uninterrupted peak: it was unchanged in 14 cuts
+and 0.38–1.94 dB lower in 6, with identical values for both implementations. On the four full replay scenarios the
+tail peak also stays 6.5–16.0 dB below the peak of the preceding second, identically in both implementations.
+
+Rust keeps its end-of-call behavior. The measurement covers one noise type, SPP-MMSE and whole-packet lengths; the
+reference with arbitrary input lengths was not measured.
 
 ### U3. MCRA never initializes without baseline frames
 
-If `FinishBaseline` runs before any baseline frame (calibration shorter than one frame), MCRA stays uninitialized and
-returns a zero noise estimate on every later frame
+**Status: confirmed.** If `FinishBaseline` runs before any baseline frame (calibration shorter than one frame), MCRA
+stays uninitialized and returns a zero noise estimate on every later frame
 ([R/dsp/noise/mcra.go#L275-L312](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L275-L312)).
-SPP-MMSE instead initializes from the first frame. Confirmation: run the reference MCRA with `FinishBaseline` before
-`Process`. Rust does not reproduce this behavior (R10); the concern about the reference stays unverified.
+SPP-MMSE instead initializes from the first frame.
+
+Evidence: `go run . u3` in `tools/go-parity` calls `StartBaseline` and then `FinishBaseline` on a new reference
+estimator before any frame, and feeds 500 frames whose bin powers are between 1e−3 and 7e−3. The MCRA estimate is 0 in
+every bin after 1, 10 and 500 frames. The SPP-MMSE estimator under the same sequence returns a largest bin of 0.007
+from the first frame on.
+
+Rust keeps its deliberate difference (R10): MCRA initializes from the first frame when no calibration frame exists.
 
 ### U4. Resets allocate
 
@@ -244,9 +272,9 @@ minimum estimator's defaults are the README's.
 The reference SPP-MMSE accumulates its baseline in `float64`
 ([R/dsp/noise/sppmmse.go#L287](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/sppmmse.go#L287)), but MCRA accumulates in `float32`
 ([R/dsp/noise/mcra.go#L366-L378](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/dsp/noise/mcra.go#L366-L378)), whose sum can lose low-order
-bits over the 311 frames of a 5 s intro. All Rust estimators share one `f64` accumulator and narrow the floored mean to `f32`. Every
-estimator also floors observed power the same way (below the floor, NaN, and infinities become the floor); the
-reference MCRA leaves `+∞` unchanged, which cannot occur with bounded μ-law input.
+bits over the 311 frames of a 5 s intro. All Rust estimators share one `f64` accumulator and narrow the floored mean
+to `f32`. Every estimator also floors observed power the same way (below the floor, NaN, and infinities become the
+floor); the reference MCRA leaves `+∞` unchanged, which cannot occur with bounded μ-law input.
 
 ### R10. MCRA initializes from the first frame without calibration
 
@@ -289,5 +317,54 @@ stage replaces non-finite intermediate values with 0 or its floor.
 
 ## Measured Parity
 
-None yet. Numeric comparison against the reference is planned with the audio and performance evidence; until an entry
-appears here, no parity is claimed.
+Every numeric comparison with the reference that was actually run. Parity is claimed only for what these entries
+measured: the listed inputs, configurations, machine and toolchains.
+
+**Harness.** [`tools/go-parity`](../tools/go-parity/main.go) is a Go module that requires the reference module
+`github.com/sghaida/noise-cancelation v0.0.0-20260920200827-cfc7520a0625` (pinned by the committed `go.sum`) and
+composes its public packages in the order of the reference's end-to-end benchmark: μ-law decode, high-pass, STFT,
+SPP-MMSE or MCRA with the baseline started at construction and finished at the first frame ending after 5 s, Log-MMSE,
+tonal transient gain, ISTFT, analyzer flush, synthesizer flush, trim to the input length, μ-law encode. It reads and
+writes headerless μ-law files and copies no reference code.
+
+**Machine and toolchains.** Apple M1 Ultra, macOS 15.5, `aarch64`; Rust 1.98.1; Go 1.27.1.
+
+**Comparison.** `noise-oxydation-eval compare <go output> <rust output>` decodes both files and reports the fraction
+of identical bytes, the largest absolute difference in 16-bit PCM units, and the energy of the difference relative to
+the Go output. It splits the call at output sample 39808, the first sample influenced by an enhanced frame
+(frame 311 starts at 128 · 311), into a calibration and an enhanced region.
+
+### P1. Replay scenarios, SPP-MMSE and MCRA with tonal suppression
+
+Inputs: the four replay scenarios' `noisy.ul` files ([evaluation.md](evaluation.md#scenarios)), 41.6–52.9 s each,
+enhanced with the default 5 s calibration by both implementations. Commands are in
+[evaluation.md](evaluation.md#reproduce).
+
+| Scenario | Estimator | Identical bytes | Max \|diff\| | Difference energy, overall | Calibration region | Enhanced region |
+| --- | --- | ---: | ---: | ---: | --- | ---: |
+| `office-5db` | SPP-MMSE | 99.9993 % | 32 | −86.6 dB | identical | −86.6 dB |
+| `office-5db` | MCRA | 99.9986 % | 64 | −80.4 dB | identical | −80.4 dB |
+| `cafeteria-5db` | SPP-MMSE | 99.9995 % | 32 | −86.7 dB | identical | −86.5 dB |
+| `cafeteria-5db` | MCRA | 99.9991 % | 16 | −88.7 dB | identical | −88.5 dB |
+| `speech-after-calibration` | SPP-MMSE | 99.9984 % | 128 | −72.0 dB | identical | −72.0 dB |
+| `speech-after-calibration` | MCRA | 99.9995 % | 256 | −69.0 dB | identical | −69.0 dB |
+| `speech-during-calibration` | SPP-MMSE | 99.9982 % | 128 | −74.6 dB | 99.9975 %, max 8, −92.3 dB | −73.7 dB |
+| `speech-during-calibration` | MCRA | 99.9982 % | 64 | −76.9 dB | 99.9975 %, max 8, −92.3 dB | −75.9 dB |
+
+The outputs are not bit-identical, but fewer than 2 bytes in 100 000 differ, and the largest decoded difference is 256
+units (0.8 % of full scale). Where the calibration region carries only noise it is byte-identical. With speech during
+calibration it differs in one byte in 40 000, which fits `f32` rounding differences in the pass-through reaching a
+μ-law decision threshold; the deliberate FFT twiddle difference (R5) is one known source of such rounding differences,
+and the measurements do not attribute the differences further. The minimum estimator (D3) and runs with tonal
+suppression disabled have no reference counterpart in the harness and were not compared.
+
+### P2. Impulse at sample 0 (U1)
+
+Input: 50 packets with `0x80` at sample 0 and `0xFF` elsewhere, SPP-MMSE with tonal suppression, 5 s calibration.
+The 8000 output bytes are identical (100 %).
+
+### P3. Truncated calls (U2)
+
+Inputs: the `office-5db` noisy input cut after 400, 520, …, 2560 and 2640 packets (20 cuts), SPP-MMSE with tonal
+suppression. Between the Rust and Go output of each cut, 99.998–100 % of the bytes are identical, and the drained tail
+peaks, relative to the uninterrupted calls, agree to 0.01 dB in every cut.

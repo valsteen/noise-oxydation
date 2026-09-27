@@ -13,6 +13,8 @@ name = "noise_oxydation"
 default = ["log"]
 # Debug-level records from `CallEnhancer::new` through the `log` facade. The packet path never logs.
 log = ["dep:log"]
+# Per-call stage timing read with `CallEnhancer::stage_timings`: counts, totals and maxima per stage, no allocation.
+stage-timing = []
 
 [dependencies]
 log = { version = "0.4", optional = true }
