@@ -1,0 +1,29 @@
+[package]
+name = "noise-oxydation"
+version = "0.1.0"
+description = "Real-time per-call noise reduction for 8 kHz G.711 mu-law telephony packets"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "noise_oxydation"
+
+[features]
+default = ["log"]
+# Debug-level records from `CallEnhancer::new` through the `log` facade. The packet path never logs.
+log = ["dep:log"]
+
+[dependencies]
+log = { version = "0.4", optional = true }
+
+[[test]]
+name = "integration"
+path = "tests/integration/suite.rs"
+
+[[test]]
+name = "allocation"
+path = "tests/integration/allocation.rs"
+
+[lints]
+workspace = true

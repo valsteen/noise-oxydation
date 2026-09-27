@@ -2,8 +2,8 @@
 
 Noise Oxydation is a Rust library for real-time enhancement of 8 kHz mono telephony audio carried in 160-byte G.711
 μ-law packets. One enhancer instance owns one call. This document owns the crate map, dependency direction, per-call
-state ownership, the packet timing contract, and the audio-critical constraints. Algorithm equations live in
-[docs/algorithms.md](docs/algorithms.md) once written; differences from the Go reference live in
+state ownership, the packet timing contract, and the audio-critical constraints. Algorithm equations, defaults, and
+units live in [docs/algorithms.md](docs/algorithms.md); differences from the Go reference live in
 [docs/reference-log.md](docs/reference-log.md).
 
 The behavior reference is [sghaida/noise-cancelation at `cfc7520`](https://github.com/sghaida/noise-cancelation/tree/cfc7520a0625da90e4ad4699541a6ffe98e7c637).
@@ -15,9 +15,25 @@ Crates are grouped by dependency surface first, then by coherent responsibility.
 
 | Crate | Role | Dependencies | Status |
 | --- | --- | --- | --- |
-| `crates/noise-oxydation` | Library: μ-law codec, high-pass filter, STFT/ISTFT, noise estimators, decision-directed SNR, Log-MMSE, tonal transient suppression, and the per-call `CallEnhancer` | `std`; optional `log` facade | Streaming path first, remaining stages next |
+| `crates/noise-oxydation` | Library: μ-law codec, high-pass filter, STFT/ISTFT, noise estimators, decision-directed SNR, Log-MMSE, tonal transient suppression, and the per-call `CallEnhancer` | `std`; optional `log` facade | Streaming packet path implemented (SPP-MMSE, decision-directed SNR, Log-MMSE); MCRA, minimum estimator, and tonal transient suppression planned |
 | `crates/noise-oxydation-eval` | Offline evaluation workflow: real-speech replay, quality metrics, packet latency and allocation measurement | `noise-oxydation`, focused WAV I/O | Planned (audio and performance evidence) |
 | `crates/how-it-works` | Project-owned renderer for `HOW_IT_WORKS.md` diagrams in day and night palettes, with a freshness check | `std` only | Planned (visual guide) |
+
+The library's public API is the per-call packet interface: `CallEnhancer` (`new`, `process_packet`, `drain`,
+`reset`, `phase`, `config`), `Packet` (`[u8; 160]`), `PacketOutcome`, `CallPhase`, `CallConfig` with its per-stage
+parameter structs, and the typed errors `ConfigError` and `StreamError`. Stages are private modules of the one crate:
+
+| Module | Responsibility |
+| --- | --- |
+| `enhancer` | `CallEnhancer`: stage order, calibration clock, packet timing, drain and reset |
+| `config`, `error` | Configuration defaults and validation; typed errors |
+| `mulaw`, `highpass` | G.711 μ-law codec; DC-blocking high-pass filter |
+| `window`, `fft`, `analysis`, `synthesis` | Symmetric Hann window; 256-point FFT; STFT framing; weighted overlap-add |
+| `spp_mmse` | SPP-MMSE noise estimator with the calibration mean |
+| `decision_directed`, `log_mmse` | A priori SNR estimation; Log-MMSE gain and the exponential integral |
+| `output_queue` | Bounded FIFO of finalized encoded samples with exact sample accounting |
+| `convert` | The audited lossy numeric conversions |
+| `geometry` | The fixed telephony constants |
 
 Rules:
 
@@ -49,15 +65,17 @@ silently replaced by defaults.
 ## Per-Call Ownership
 
 `CallEnhancer` is the composition root for one call. It exclusively owns every piece of temporal state for that call:
-high-pass filter memory, the analysis input buffer, FFT scratch and twiddles, noise-estimator state, decision-directed
-SNR history, Log-MMSE and interference state, the synthesis overlap buffers, the calibration clock, and the encoded
-output queue. Nothing is shared between calls: the library owns no global mutable state, no shared caches, and no locks.
+high-pass filter memory, the analysis input buffer, the window, FFT scratch and twiddles, noise-estimator state,
+decision-directed SNR history, Log-MMSE scratch, the synthesis overlap buffers, the calibration clock, and the encoded
+output queue. The tonal transient detector's state will join this list when it is implemented. All of it is stored in
+fixed-size arrays inside the instance. Nothing is shared between calls: the library owns no global mutable state, no shared caches, and no locks.
 (The optional `log` facade keeps its own process-wide logger registration; the library only reads it at construction.)
 
 - Processing within a call is strictly sequential. Each packet runs the stages in order on the caller's thread.
 - Independent calls run in parallel by giving each call its own `CallEnhancer` on whatever thread or task drives that
   call. `CallEnhancer` is `Send` (it may move between threads between calls to its methods) and its mutating methods
-  take `&mut self`, so the compiler rejects concurrent use of one instance.
+  take `&mut self`, so the compiler rejects concurrent use of one instance. An integration test runs several calls on
+  parallel threads and checks their output is byte-identical to sequential processing.
 - There is no cross-thread boundary inside the library, so it uses no atomics or locks. If a future feature adds one
   (for example publishing statistics to a monitoring thread), values that must be observed together are published as
   one coherent snapshot, never as independently updated atomics.
@@ -67,14 +85,14 @@ output queue. Nothing is shared between calls: the library owns no global mutabl
 Input arrives as whole 160-byte packets. Output leaves as whole 160-byte packets, in order, with a fixed algorithmic
 delay of two packets (40 ms):
 
-- Packets 1 and 2 of a call produce no output (`Priming`).
-- From packet 3 on, every input packet produces exactly one output packet: output packet *n* carries the enhanced
-  samples of input packet *n − 2*.
+- Packets 1 and 2 of a call produce no output: `process_packet` returns `PacketOutcome::Priming`.
+- From packet 3 on, every input packet produces exactly one output packet (`PacketOutcome::Emitted`): output packet *n*
+  carries the enhanced samples of input packet *n − 2*.
 - `drain` ends the call. It processes the buffered tail with one zero-padded analysis frame plus the synthesis tail and
   returns exactly the withheld packets (`min(packets_in, 2)`), so the total output sample count equals the total input
   sample count. Samples beyond the input end (analysis padding) are never emitted. Draining a call that received no
   packet processes no frame and returns zero packets.
-- After `drain`, further packets are rejected with a typed lifecycle error until `reset`.
+- After `drain`, further packets and drains are rejected with `StreamError::Drained` until `reset`.
 - `reset` starts a new call on the same instance. It discards any buffered input and withheld output, restores the
   calibration clock, and reuses all storage.
 
@@ -98,12 +116,13 @@ duration is 5 s and is configurable (zero disables calibration).
   un-enhanced (high-pass filtered only).
 - At the first non-calibration frame the estimator switches to adaptive tracking, initialized from the calibration
   mean.
-- The call phase is `Calibrating` from construction until the first non-calibration frame has been processed, then
-  `Enhancing`. When the duration is shorter than one frame (256 samples), no calibration frame exists and the phase
+- The call phase (`CallEnhancer::phase`) is `CallPhase::Calibrating` from construction until the first
+  non-calibration frame has been processed, then `CallPhase::Enhancing`; after `drain` it is `CallPhase::Drained`. When the duration is shorter than one frame (256 samples), no calibration frame exists and the phase
   starts as `Enhancing`; the estimator then initializes from the first frame.
 - Speech during calibration is passed through un-enhanced, and it is learned as noise. The inflated noise estimate
   over-suppresses speech bands right after calibration until the adaptive estimator tracks back down. The recovery time
-  depends on the estimator and is measured in the evaluation evidence rather than assumed.
+  depends on the estimator; it has not been measured yet and will be measured in the planned evaluation evidence rather
+  than assumed.
 
 ## Audio-Critical Constraints
 
@@ -135,7 +154,8 @@ allocation-counting `GlobalAlloc` test harness, which delegates to `std::alloc::
 ## Numeric Conversions
 
 Clippy pedantic runs with warnings as errors. Lossy numeric conversions that cannot be expressed with a lossless std
-conversion (f64 → f32 narrowing, float → PCM16 quantization) are confined to one audited conversion module. Every lint
+conversion (f64 → f32 narrowing, float → PCM16 quantization) are confined to one audited conversion module
+(`crates/noise-oxydation/src/convert.rs`). Every lint
 expectation is narrow, carries a `reason`, and is listed in [docs/lint-exceptions.md](docs/lint-exceptions.md).
 
 ## Limitations

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORMAT_TOOLCHAIN: nightly-2026-09-25
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the pinned nightly rustfmt
+        run: rustup toolchain install "$FORMAT_TOOLCHAIN" --profile minimal --component rustfmt
+      - run: cargo +"$FORMAT_TOOLCHAIN" fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - run: cargo test --locked --workspace --all-features
+      - run: cargo test --locked -p noise-oxydation --no-default-features
+
+  build:
+    name: Release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - run: cargo build --locked --workspace --release

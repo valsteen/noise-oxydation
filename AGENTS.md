@@ -9,6 +9,8 @@ Instructions for AI coding agents working in this repository.
 - [docs/reference-log.md](docs/reference-log.md) owns every difference from, or concern about, the Go behavior reference.
   Add an entry whenever you rely on, disagree with, or diverge from reference behavior. Never claim numerical parity
   without a measured entry.
+- [docs/algorithms.md](docs/algorithms.md) owns the implemented equations, defaults, and units. Update it with any
+  algorithm or default change.
 - [docs/lint-exceptions.md](docs/lint-exceptions.md) lists every lint expectation.
 
 ## Commands
@@ -21,6 +23,9 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 cargo build --locked --workspace --release
 ```
+
+CI also runs `cargo test --locked -p noise-oxydation --no-default-features` to keep the crate building without the
+`log` feature.
 
 The stable toolchain is pinned in `rust-toolchain.toml`. Formatting intentionally uses the pinned nightly rustfmt
 because `rustfmt.toml` uses unstable options.
@@ -44,7 +49,9 @@ because `rustfmt.toml` uses unstable options.
   mod tests;
   ```
 
-  Integration tests live under `tests/integration/`.
+  Integration tests live under `tests/integration/`: `suite.rs` (the `integration` target) groups the packet
+  lifecycle, calibration, reset, and parallel-call tests, and `allocation.rs` (the `allocation` target) is the only
+  binary with the counting global allocator. Register a new integration target in the crate's `Cargo.toml`.
 - Do not add tautological tests that restate constants or the production algorithm. Test observable behavior, failure
   handling, lifecycle, regressions, and independently derived expectations (closed-form math, reference-documented
   values).

@@ -132,12 +132,24 @@ and the synthesizer emits 0 ([R/dsp/stft/istft.go#L98-L106](https://github.com/s
 Samples 1–127 are reconstructed from a single frame. The effect is inaudible in the quiet intro, but it is a lost input
 sample. Confirmation: run the reference on an impulse at sample 0.
 
+Observed in the Rust implementation, which keeps the reference grid: sample 0 is always emitted as 0, and sample 1 is
+divided by its single-frame squared-window weight `w[1]² ≈ 2.3e−8`, so the `f32` FFT rounding in that frame is
+amplified by about `1/w[1] ≈ 6600`. Even with unmodified spectra, sample 1 therefore carries an error far larger than
+single-precision rounding, while samples 2 onward reconstruct within one μ-law level. The packet lifecycle
+integration test exempts samples 0 and 1 for this reason
+([crates/noise-oxydation/tests/integration/lifecycle.rs](../crates/noise-oxydation/tests/integration/lifecycle.rs)).
+
 ### U2. The last valid samples may be amplified after enhancement
 
 After flush, samples beyond the last full overlap come from one frame divided by `w[n]²`, which approaches `2.3e−8` near
 the frame end. Unmodified spectra reconstruct exactly, but gain-modified frames are no longer zero at their edges, so the
 division can amplify them. Confirmation: measure the peak of the last 127 output samples on enhanced real speech against
 the preceding samples.
+
+Rust note: with whole 160-sample packets the input length is `160p`, so the drain frame holds 128, 160, 192, or 224
+valid samples and the last valid sample sits at most at window index 223 (`w ≈ 0.15`). The near-zero weights at the
+very end of the frame only affect analysis padding, which Rust never emits. Enhanced frames can still be amplified
+near that end by up to `1/w`; the measurement above remains planned.
 
 ### U3. MCRA never initializes without baseline frames
 
@@ -196,6 +208,14 @@ differs numerically from the reference; parity is claimed only as measured below
 ### R6. No allocation after construction
 
 All storage is sized at construction; `reset` reuses it (contrast U4).
+
+### R7. Calibration sample count by integer arithmetic
+
+The calibration boundary is `floor(duration · 8000)` computed exactly from the `Duration`'s nanoseconds. The reference
+benchmark converts `Seconds() · 8000` through `float64` before truncating
+([R/benchmark/end_to_end_benchmark_test.go#L282](https://github.com/sghaida/noise-cancelation/blob/cfc7520a0625da90e4ad4699541a6ffe98e7c637/benchmark/end_to_end_benchmark_test.go#L282)),
+which can land one sample lower for durations that are not exactly representable. The boundary frame can differ only
+when that single sample crosses a frame end; the 5 s default gives 40 000 samples in both.
 
 ## Measured Parity
 
