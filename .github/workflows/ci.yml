@@ -18,7 +18,7 @@ jobs:
       - run: cargo test --locked --workspace --all-targets --all-features
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: rustc --edition=2024 -D warnings tools/render_how_it_works.rs -o "$RUNNER_TEMP/render_how_it_works"
-      - run: "$RUNNER_TEMP/render_how_it_works" --check
+      - run: '"$RUNNER_TEMP/render_how_it_works" --check'
   format:
     runs-on: ubuntu-latest
     steps:
