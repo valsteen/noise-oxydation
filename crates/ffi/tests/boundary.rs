@@ -115,6 +115,16 @@ fn constructor_preserves_error_cause() {
             10
         );
         assert!(handle.is_null());
+        let short_experimental = no_create_with_mode(32_000_000, 0, 1, &raw mut handle);
+        assert_eq!(
+            (
+                short_experimental.status,
+                short_experimental.samples,
+                short_experimental.minimum
+            ),
+            (6, 256, 320)
+        );
+        assert!(handle.is_null());
     }
 }
 
