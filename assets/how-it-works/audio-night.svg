@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="565" viewBox="0 0 1000 565" role="img" aria-labelledby="title description">
+<title id="title">Packet enhancement and quiet-intro bypass</title>
+<desc id="description">One 160-byte mu-law packet is decoded. High-pass and 256-point STFT analyze 128-sample hops. After learning, selected noise estimation, Log-MMSE, tonal gain and synthesis feed encoded output. During quiet-intro learning, original decoded audio bypasses suppression.</desc>
+<defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 H 0 V 24" fill="none" stroke="#45535f" stroke-width="1"/></pattern><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#9ba8b1"/></marker><marker id="bypass-arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#9b948b"/></marker></defs>
+<rect width="1000" height="565" fill="#1c2127"/><rect width="1000" height="565" fill="url(#grid)"/><rect x="1" y="1" width="998" height="563" fill="none" stroke="#45515c" stroke-width="2"/>
+<rect x="40" y="215" width="175" height="110" fill="#242b32" stroke="#5e6a74" stroke-width="1.5"/><rect x="40" y="215" width="6" height="110" fill="#91a7bb"/>
+<rect x="275" y="80" width="195" height="145" fill="#242b32" stroke="#5e6a74" stroke-width="1.5"/><rect x="275" y="80" width="6" height="145" fill="#91a7bb"/>
+<rect x="515" y="80" width="205" height="145" fill="#242b32" stroke="#5e6a74" stroke-width="1.5"/><rect x="515" y="80" width="6" height="145" fill="#91a7bb"/>
+<rect x="760" y="80" width="205" height="145" fill="#242b32" stroke="#5e6a74" stroke-width="1.5"/><rect x="760" y="80" width="6" height="145" fill="#91a7bb"/>
+<rect x="275" y="380" width="245" height="125" fill="#242b32" stroke="#5e6a74" stroke-width="1.5"/><rect x="275" y="380" width="6" height="125" fill="#9b948b"/>
+<rect x="760" y="380" width="205" height="125" fill="#242b32" stroke="#5e6a74" stroke-width="1.5"/><rect x="760" y="380" width="6" height="125" fill="#91a7bb"/>
+<path d="M 215 250 H 245 V 150 H 275" fill="none" stroke="#9ba8b1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 470 150 H 515" fill="none" stroke="#9ba8b1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 720 150 H 760" fill="none" stroke="#9ba8b1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 862 225 V 380" fill="none" stroke="#9ba8b1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M 215 290 H 245 V 440 H 275" fill="none" stroke="#9b948b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#bypass-arrow)"/>
+<path d="M 520 440 H 760" fill="none" stroke="#9b948b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#bypass-arrow)"/>
+<text x="62" y="241" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">INPUT</text>
+<text x="62" y="270" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Decode μ-law</text>
+<text x="62" y="296" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">160 bytes / 20 ms</text>
+<text x="297" y="106" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">FRAME ANALYSIS</text>
+<text x="297" y="135" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">High-pass + STFT</text>
+<text x="297" y="161" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">Hann, 256 samples</text>
+<text x="297" y="181" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">128-sample hop</text>
+<text x="537" y="106" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">NOISE AND GAIN</text>
+<text x="537" y="135" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Noise + Log-MMSE</text>
+<text x="537" y="161" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">SPP-MMSE default</text>
+<text x="537" y="181" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">MCRA / minimum</text>
+<text x="782" y="106" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">SYNTHESIS</text>
+<text x="782" y="135" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Tonal + inverse FFT</text>
+<text x="782" y="161" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">all estimators</text>
+<text x="782" y="181" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">overlap normalization</text>
+<text x="297" y="406" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">QUIET INTRO</text>
+<text x="297" y="435" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Original PCM bypass</text>
+<text x="297" y="461" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">frames before cutoff</text>
+<text x="297" y="481" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">complete windows learn noise</text>
+<text x="782" y="406" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="11.5" font-weight="700" letter-spacing="1">OUTPUT</text>
+<text x="782" y="435" fill="#edf1f2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="17" font-weight="700">Encode + batch</text>
+<text x="782" y="461" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">0–2 whole packets</text>
+<text x="782" y="481" fill="#c5cdd0" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">finish: final valid count</text>
+<rect x="275" y="36" width="360" height="21" fill="#1c2127"/><text x="280" y="52" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="12" font-weight="700" letter-spacing="0.8">ANALYZE ALWAYS · GAIN AFTER INTRO</text>
+<rect x="275" y="336" width="228" height="21" fill="#1c2127"/><text x="280" y="352" fill="#b7c0c5" font-family="ui-monospace, SFMono-Regular, monospace" font-size="12" font-weight="700" letter-spacing="0.8">QUIET-INTRO OUTPUT</text>
+</svg>
