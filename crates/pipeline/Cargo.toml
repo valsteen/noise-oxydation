@@ -13,6 +13,10 @@ noise-oxydation-dsp = { path = "../dsp" }
 logging = []
 performance-analysis = []
 
+[[test]]
+name = "no_alloc"
+harness = false
+
 [[example]]
 name = "packet_bench"
 required-features = ["performance-analysis"]

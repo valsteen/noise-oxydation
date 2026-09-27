@@ -29,8 +29,7 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 
-#[test]
-fn processing_and_finish_allocate_nothing_after_construction() {
+fn main() {
     for noise_estimator in [
         NoiseEstimator::SppMmse,
         NoiseEstimator::Mcra,
