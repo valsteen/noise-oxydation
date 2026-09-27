@@ -2,7 +2,7 @@
 
 use noise_oxydation_codec::{decode, encode};
 pub use noise_oxydation_dsp::{DspError, NoiseEstimator};
-use noise_oxydation_dsp::{Enhancer, HOP};
+use noise_oxydation_dsp::{Enhancer, HOP, LOW_HOP, LowDelayEnhancer};
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
@@ -10,6 +10,15 @@ use std::time::Duration;
 pub const PACKET_SAMPLES: usize = 160;
 /// Processing or finishing can emit at most two packets per call.
 pub const MAX_BATCH_PACKETS: usize = 2;
+
+/// Conservative is the existing output-preserving default. The lower-delay
+/// path is experimental and may change suppression quality and CPU cost.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProcessingMode {
+    #[default]
+    Conservative,
+    ExperimentalLowDelay,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -109,8 +118,23 @@ impl PacketBatch {
     }
 }
 
+#[allow(clippy::large_enum_variant)] // Both variants are fixed ~36 KiB call state; boxing adds an allocation and indirection.
+enum Dsp {
+    Conservative(Enhancer),
+    ExperimentalLowDelay(LowDelayEnhancer),
+}
+
+impl Dsp {
+    fn reset(&mut self) {
+        match self {
+            Self::Conservative(dsp) => dsp.reset(),
+            Self::ExperimentalLowDelay(dsp) => dsp.reset(),
+        }
+    }
+}
+
 pub struct Pipeline {
-    dsp: Enhancer,
+    dsp: Dsp,
     pending: [u8; PACKET_SAMPLES],
     pending_len: usize,
     input_samples: u64,
@@ -125,6 +149,15 @@ impl Pipeline {
     /// Returns [`PipelineError::InvalidLearningDuration`] for zero or overflow,
     /// or [`PipelineError::DspInitialization`] if the interval is shorter than one FFT frame.
     pub fn new(config: Config) -> Result<Self, PipelineError> {
+        Self::new_with_mode(config, ProcessingMode::Conservative)
+    }
+
+    /// Construct one call with an explicit processing mode. Both modes live
+    /// in the same binary; selection is fixed for the lifetime of the call.
+    ///
+    /// # Errors
+    /// Returns the same configuration errors as [`Self::new`].
+    pub fn new_with_mode(config: Config, mode: ProcessingMode) -> Result<Self, PipelineError> {
         let nanos = config.learning_duration.as_nanos();
         let samples = nanos
             .checked_mul(8_000)
@@ -133,8 +166,16 @@ impl Pipeline {
             .and_then(|value| u64::try_from(value).ok())
             .filter(|&value| value != 0)
             .ok_or(PipelineError::InvalidLearningDuration)?;
-        let dsp = Enhancer::with_estimator(samples, config.noise_estimator)
-            .map_err(PipelineError::DspInitialization)?;
+        let dsp = match mode {
+            ProcessingMode::Conservative => Dsp::Conservative(
+                Enhancer::with_estimator(samples, config.noise_estimator)
+                    .map_err(PipelineError::DspInitialization)?,
+            ),
+            ProcessingMode::ExperimentalLowDelay => Dsp::ExperimentalLowDelay(
+                LowDelayEnhancer::with_estimator(samples, config.noise_estimator)
+                    .map_err(PipelineError::DspInitialization)?,
+            ),
+        };
         Ok(Self {
             dsp,
             pending: [0xff; PACKET_SAMPLES],
@@ -159,8 +200,17 @@ impl Pipeline {
         let mut batch = PacketBatch::empty();
         for &code in input {
             let sample = f32::from(decode(code)) / 32_768.0;
-            if let Some(output) = self.dsp.push(sample) {
-                self.append_output(&output, HOP, &mut batch);
+            match &mut self.dsp {
+                Dsp::Conservative(dsp) => {
+                    if let Some(output) = dsp.push(sample) {
+                        self.append_output(&output, HOP, &mut batch);
+                    }
+                }
+                Dsp::ExperimentalLowDelay(dsp) => {
+                    if let Some(output) = dsp.push(sample) {
+                        self.append_output(&output, LOW_HOP, &mut batch);
+                    }
+                }
             }
         }
         self.input_samples += PACKET_SAMPLES as u64;
@@ -172,7 +222,7 @@ impl Pipeline {
     ///
     /// # Errors
     /// Returns [`PipelineError::AlreadyFinished`] on a second call.
-    #[allow(clippy::cast_possible_truncation)] // The minimum limits this value to HOP (128).
+    #[allow(clippy::cast_possible_truncation)] // The minimum limits this value to a DSP hop (at most 128).
     pub fn finish(&mut self) -> Result<PacketBatch, PipelineError> {
         if self.finished {
             return Err(PipelineError::AlreadyFinished);
@@ -180,9 +230,21 @@ impl Pipeline {
         self.finished = true;
         let mut batch = PacketBatch::empty();
         while self.output_samples < self.input_samples {
-            if let Some(output) = self.dsp.push(0.0) {
-                let valid = (self.input_samples - self.output_samples).min(HOP as u64) as usize;
-                self.append_output(&output, valid, &mut batch);
+            match &mut self.dsp {
+                Dsp::Conservative(dsp) => {
+                    if let Some(output) = dsp.push(0.0) {
+                        let valid =
+                            (self.input_samples - self.output_samples).min(HOP as u64) as usize;
+                        self.append_output(&output, valid, &mut batch);
+                    }
+                }
+                Dsp::ExperimentalLowDelay(dsp) => {
+                    if let Some(output) = dsp.push(0.0) {
+                        let valid =
+                            (self.input_samples - self.output_samples).min(LOW_HOP as u64) as usize;
+                        self.append_output(&output, valid, &mut batch);
+                    }
+                }
             }
         }
         if self.pending_len != 0 {
@@ -221,7 +283,7 @@ impl Pipeline {
     }
 
     #[allow(clippy::cast_possible_truncation)] // Clamp and rounding bound PCM to i16.
-    fn append_output(&mut self, samples: &[f32; HOP], valid: usize, batch: &mut PacketBatch) {
+    fn append_output(&mut self, samples: &[f32], valid: usize, batch: &mut PacketBatch) {
         for &sample in &samples[..valid] {
             let pcm = (sample.clamp(-1.0, 32_767.0 / 32_768.0) * 32_768.0).round() as i16;
             self.pending[self.pending_len] = encode(pcm);

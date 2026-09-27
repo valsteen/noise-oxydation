@@ -27,7 +27,7 @@ func writeBatch(w *bufio.Writer, output *[noise.OutputBytes]byte, batch noise.Ba
 	return valid, nil
 }
 
-func run(inputPath, outputPath string, estimator noise.Estimator) (err error) {
+func run(inputPath, outputPath string, estimator noise.Estimator, mode noise.ProcessingMode) (err error) {
 	in, err := os.Open(inputPath)
 	if err != nil {
 		return err
@@ -54,7 +54,7 @@ func run(inputPath, outputPath string, estimator noise.Estimator) (err error) {
 			err = closeErr
 		}
 	}()
-	call, err := noise.New(noise.Config{LearningDuration: noise.DefaultConfig().LearningDuration, Estimator: estimator})
+	call, err := noise.New(noise.Config{LearningDuration: noise.DefaultConfig().LearningDuration, Estimator: estimator, Mode: mode})
 	if err != nil {
 		return err
 	}
@@ -106,14 +106,17 @@ func main() {
 	input := flag.String("input", "", "packet-aligned 8 kHz mono μ-law input")
 	output := flag.String("output", "", "μ-law output")
 	estimator := flag.String("estimator", "spp", "spp, mcra, or minimum")
+	mode := flag.String("mode", "conservative", "conservative or experimental")
 	flag.Parse()
 	choices := map[string]noise.Estimator{"spp": noise.SppMmse, "mcra": noise.Mcra, "minimum": noise.Minimum}
 	selected, ok := choices[*estimator]
-	if *input == "" || *output == "" || !ok {
-		fmt.Fprintln(os.Stderr, "usage: replay -input prepared.mulaw -output enhanced.mulaw [-estimator spp|mcra|minimum]")
+	modes := map[string]noise.ProcessingMode{"conservative": noise.Conservative, "experimental": noise.ExperimentalLowDelay}
+	selectedMode, modeOK := modes[*mode]
+	if *input == "" || *output == "" || !ok || !modeOK {
+		fmt.Fprintln(os.Stderr, "usage: replay -input prepared.mulaw -output enhanced.mulaw [-estimator spp|mcra|minimum] [-mode conservative|experimental]")
 		os.Exit(2)
 	}
-	if err := run(*input, *output, selected); err != nil {
+	if err := run(*input, *output, selected, selectedMode); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

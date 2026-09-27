@@ -1,6 +1,8 @@
 //! Offline replay of caller-supplied 8 kHz mono 16-bit PCM WAV through the public packet API.
 use noise_oxydation_codec::{decode, encode};
-use noise_oxydation_pipeline::{Config, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline};
+use noise_oxydation_pipeline::{
+    Config, NoiseEstimator, PACKET_SAMPLES, PacketBatch, Pipeline, ProcessingMode,
+};
 use std::error::Error;
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -108,17 +110,29 @@ fn append(batch: &PacketBatch, output: &mut Vec<u8>) {
     }
 }
 
-fn replay(input: &[u8], estimator: NoiseEstimator) -> Result<Vec<u8>, Box<dyn Error>> {
-    let mut pipeline = Pipeline::new(Config {
-        noise_estimator: estimator,
-        ..Config::default()
-    })?;
+fn replay(
+    input: &[u8],
+    estimator: NoiseEstimator,
+    mode: ProcessingMode,
+) -> Result<(Vec<u8>, usize), Box<dyn Error>> {
+    let mut pipeline = Pipeline::new_with_mode(
+        Config {
+            noise_estimator: estimator,
+            ..Config::default()
+        },
+        mode,
+    )?;
     let mut output = Vec::with_capacity(input.len());
-    for packet in input.as_chunks::<PACKET_SAMPLES>().0 {
-        append(&pipeline.process_packet(packet)?, &mut output);
+    let mut first_output_packet = 0;
+    for (index, packet) in input.as_chunks::<PACKET_SAMPLES>().0.iter().enumerate() {
+        let batch = pipeline.process_packet(packet)?;
+        if first_output_packet == 0 && !batch.is_empty() {
+            first_output_packet = index + 1;
+        }
+        append(&batch, &mut output);
     }
     append(&pipeline.finish()?, &mut output);
-    Ok(output)
+    Ok((output, first_output_packet))
 }
 
 #[allow(clippy::cast_precision_loss)] // Offline WAV slices are far below 2^53 samples.
@@ -157,11 +171,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = args.next().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidInput,
-            "usage: wav_replay <8k-mono.wav> [prepared.mulaw] [outputs_dir]",
+            "usage: wav_replay <8k-mono.wav> [prepared.mulaw] [outputs_dir] [conservative|experimental]",
         )
     })?;
     let dump = args.next();
     let outputs_dir = args.next();
+    let mode = match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+        None | Some("conservative") => ProcessingMode::Conservative,
+        Some("experimental") => ProcessingMode::ExperimentalLowDelay,
+        _ => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "mode must be conservative or experimental",
+            )
+            .into());
+        }
+    };
     if args.next().is_some() {
         return Err(io::Error::new(ErrorKind::InvalidInput, "too many arguments").into());
     }
@@ -192,7 +217,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         NoiseEstimator::Mcra,
         NoiseEstimator::Minimum,
     ] {
-        let output = replay(&input, estimator)?;
+        let (output, first_output_packet) = replay(&input, estimator, mode)?;
         if output.len() != input.len() {
             return Err(invalid("pipeline returned a different valid sample count").into());
         }
@@ -210,7 +235,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let (correlation, projection_gain) =
             speech_metrics(&clean[800..source.len() - 800], &speech)?;
         println!(
-            "{estimator:?}: valid_samples={} noise_rms_ratio={:.4} speech_correlation={correlation:.4} speech_projection_gain={projection_gain:.4}",
+            "{mode:?} {estimator:?}: first_output_input_packet={first_output_packet} valid_samples={} noise_rms_ratio={:.4} speech_correlation={correlation:.4} speech_projection_gain={projection_gain:.4}",
             output.len(),
             rms(&output_noise) / rms(&input_noise)
         );

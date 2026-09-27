@@ -2,8 +2,11 @@
 //! estimation, decision-directed SNR, Log-MMSE, tonal gain, and normalized ISTFT.
 #![allow(clippy::cast_precision_loss)] // All loop indices and frame counts here are bounded by the fixed FFT geometry.
 
+mod low_delay;
 mod noise;
 mod tonal;
+
+pub use low_delay::{LOW_HOP, LowDelayEnhancer};
 
 pub use noise::NoiseEstimator;
 use noise::NoiseState;

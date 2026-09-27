@@ -17,20 +17,26 @@ Independent calls can run at the same time when the caller schedules separate `P
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/audio-night.svg">
-  <img src="assets/how-it-works/audio-day.svg" alt="Decoded packets enter high-pass filtering and 256-point STFT. After the quiet intro, selected noise estimation, Log-MMSE, tonal gain, and synthesis lead to encoded output. During the intro, original decoded audio bypasses suppression while complete frames learn noise.">
+  <img src="assets/how-it-works/audio-day.svg" alt="Decoded packets enter high-pass filtering and 256-point STFT. A per-call mode selects a 128-sample conservative hop or 80-sample experimental hop. After the quiet intro, selected noise estimation, Log-MMSE, tonal gain, and synthesis lead to encoded output. Original decoded audio bypasses suppression during learning.">
 </picture>
 
-`process_packet(&[u8; 160])` decodes each 20 ms packet. A first-order high-pass filter feeds a periodic Hann short-time Fourier transform (STFT). The first 256 samples complete a frame; subsequent frames start every 128 samples. One input packet can complete zero, one, or two hops, so its result can contain zero, one, or two **whole** output packets.
+`process_packet(&[u8; 160])` decodes each 20 ms packet. A first-order high-pass filter feeds a 256-point short-time Fourier transform (STFT). The default conservative mode uses a periodic Hann window and advances every 128 samples. One input packet can complete zero, one, or two conservative hops, so its result can contain zero, one, or two **whole** output packets.
 
-The default `learning_duration` is five seconds and assumes a quiet intro. Complete FFT windows wholly inside the interval update the noise baseline. Frames starting before the cutoff emit the original decoded PCM instead of filtered, reconstructed audio. With the default 40,000-sample interval, the first suppressed frame starts at sample 40,064 (5.008 seconds). A different call setup can configure another duration; at least one complete 256-sample frame is required.
+The default `learning_duration` is five seconds and assumes a quiet intro. Complete FFT windows wholly inside the interval update the noise baseline. Frames starting before the conservative cutoff emit the original decoded PCM instead of filtered, reconstructed audio. With the default 40,000-sample interval, the first conservative suppressed frame starts at sample 40,064 (5.008 seconds). A different call setup can configure another duration; at least one complete 256-sample frame is required.
 
 After the intro, the selected estimator updates one call-owned noise spectrum:
 
 - **SPP-MMSE** is the default. It smooths speech-presence probability for a conditional noise update.
-- **MCRA** compares smoothed power with a fixed 50-frame minimum history, then uses speech probability to slow noise updates. A Rust safeguard protects sustained narrowband voice after the window turns over.
+- **MCRA** compares smoothed power with a fixed 50-frame conservative minimum history, then uses speech probability to slow noise updates. A Rust safeguard protects sustained narrowband voice after the window turns over.
 - **Minimum estimation** uses the same history as a lower-envelope estimate. It can learn continuous foreground energy.
 
-All three alternatives feed the same decision-directed prior SNR and Log-MMSE gain. Tonal gain then attenuates isolated transient peaks while accounting for neighboring and harmonic evidence. The modified spectrum passes through inverse FFT, Hann synthesis, and window-square overlap normalization. `codec` encodes the valid output samples back to μ-law.
+All three alternatives feed the same decision-directed prior SNR and Log-MMSE gain. Tonal gain then attenuates isolated transient peaks while accounting for neighboring and harmonic evidence. In conservative mode, the modified spectrum passes through inverse FFT, Hann synthesis, and window-square overlap normalization. `codec` encodes the valid output samples back to μ-law.
+
+## Choose processing delay per call
+
+`Pipeline::new` and the zero-value Go mode use the conservative path. It first returns a complete output packet with input packet three. `Pipeline::new_with_mode(config, ProcessingMode::ExperimentalLowDelay)` and Go `Config.Mode = ExperimentalLowDelay` select a separate experimental DSP instance in the same binary. It keeps 256-point analysis, advances every 80 samples, and synthesizes from a 160-sample asymmetric window. Its first complete packet returns with input packet two. Both modes preserve ordered valid audio, quiet-intro bypass, one-time finish, and reset.
+
+The shorter hop performs more FFT work and changes the sound after spectral gains. MCRA and minimum use 80 experimental history frames to retain the conservative 800 ms horizon, but other per-frame smoothing has a different time base. On two credited voices with fixed-seed broadband noise, experimental minimum estimation left more residual noise. The [mode comparison](docs/processing-modes.md) gives exact measurements, reproducible commands, and the limits of this evidence. Keep the conservative default until the experimental tradeoff has been checked on representative calls.
 
 The formulas and safeguards chosen where the Go documentation is incomplete are [recorded separately](docs/reference-observations.md). The [real-speech replay](docs/real-audio-evidence.md) measures this Rust path on one credited clip; it does not establish universal speech quality or exact Go numerical parity.
 

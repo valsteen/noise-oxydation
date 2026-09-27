@@ -1,4 +1,4 @@
-use noise_oxydation_pipeline::{Config, NoiseEstimator, PACKET_SAMPLES, Pipeline};
+use noise_oxydation_pipeline::{Config, NoiseEstimator, PACKET_SAMPLES, Pipeline, ProcessingMode};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -35,23 +35,31 @@ fn main() {
         NoiseEstimator::Mcra,
         NoiseEstimator::Minimum,
     ] {
-        let mut pipeline = Pipeline::new(Config {
-            noise_estimator,
-            ..Config::default()
-        })
-        .unwrap();
-        let packet = [0x80; PACKET_SAMPLES];
-        ALLOCATIONS.store(0, Ordering::Relaxed);
-        COUNTING.store(true, Ordering::Relaxed);
-        for _ in 0..400 {
-            let _ = pipeline.process_packet(&packet).unwrap();
+        for mode in [
+            ProcessingMode::Conservative,
+            ProcessingMode::ExperimentalLowDelay,
+        ] {
+            let mut pipeline = Pipeline::new_with_mode(
+                Config {
+                    noise_estimator,
+                    ..Config::default()
+                },
+                mode,
+            )
+            .unwrap();
+            let packet = [0x80; PACKET_SAMPLES];
+            ALLOCATIONS.store(0, Ordering::Relaxed);
+            COUNTING.store(true, Ordering::Relaxed);
+            for _ in 0..400 {
+                let _ = pipeline.process_packet(&packet).unwrap();
+            }
+            let _ = pipeline.finish().unwrap();
+            COUNTING.store(false, Ordering::Relaxed);
+            assert_eq!(
+                ALLOCATIONS.load(Ordering::Relaxed),
+                0,
+                "{noise_estimator:?} {mode:?}"
+            );
         }
-        let _ = pipeline.finish().unwrap();
-        COUNTING.store(false, Ordering::Relaxed);
-        assert_eq!(
-            ALLOCATIONS.load(Ordering::Relaxed),
-            0,
-            "{noise_estimator:?}"
-        );
     }
 }

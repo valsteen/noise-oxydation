@@ -153,3 +153,28 @@ func TestEstimatorsShareIntroAndDivergeAfterLearning(t *testing.T) {
 		}
 	}
 }
+
+func TestExperimentalModeAndInvalidSelector(t *testing.T) {
+	_, err := New(Config{LearningDuration: time.Second, Mode: ProcessingMode(99)})
+	wantStatus(t, err, StatusMode)
+	for _, mode := range []ProcessingMode{Conservative, ExperimentalLowDelay} {
+		call, err := New(Config{LearningDuration: time.Second, Mode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input [PacketBytes]byte
+		var output [OutputBytes]byte
+		for i := 0; i < 3; i++ {
+			batch, err := call.Process(&input, &output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if i == 1 && batch.Count != map[ProcessingMode]int{Conservative: 0, ExperimentalLowDelay: 1}[mode] {
+				t.Fatalf("mode %d emitted %d packets on input 2", mode, batch.Count)
+			}
+		}
+		if err := call.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
