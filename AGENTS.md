@@ -1,5 +1,8 @@
 # Repository guidance
 
+- For a request limited to an answer, explanation, review, or diagnosis, keep the repository read-only. Make changes only after the human requests a change.
+- Before an authorized implementation source edit, tell the human whether the change follows an existing Pinboard item, a new Pinboard item, or direct work outside Pinboard. An already-authorized change needs no repeat approval. Use the main `$pinboard` skill for workflow details.
+
 - This Rust 2024 workspace has four current owners: `codec` converts G.711 μ-law, `dsp` owns fixed-frame signal processing, `pipeline` owns packet and call lifecycle, and `ffi` exports the C boundary. The `go` module owns the safe per-call Go wrapper. Keep dependencies directed from FFI to pipeline to codec/DSP.
 - The public path is 8 kHz mono and consumes 160-byte packets. Preserve ordered valid samples, the whole-packet process result, one-time finish with its final valid count, and full reset.
 - Keep processing and finish free of allocation and blocking synchronization. Recheck `crates/pipeline/tests/no_alloc.rs` when changing those paths.
