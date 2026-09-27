@@ -24,7 +24,7 @@ folders under `crates/`; the workspace members are `crates/*/*`. Dependencies po
 
 `crates/core` holds the library that applications depend on, `crates/tools` the development tools that depend on it,
 and `crates/bindings` the foreign-language boundary. Outside the Cargo workspace, [`go/`](go) is the Go module
-`github.com/valsteen/noise-oxydation-claude/go` (package `noiseox`), which links the C ABI crate's static library
+`github.com/valsteen/noise-oxydation/go` (package `noiseox`), which links the C ABI crate's static library
 through cgo; see [docs/go-integration.md](docs/go-integration.md).
 
 Also outside the Cargo workspace, [`tools/go-parity`](tools/go-parity/main.go) is a Go module that drives the pinned Go
@@ -79,7 +79,7 @@ build and link steps.
 
 Boundary decision: a C ABI crate, `crates/bindings/noise-oxydation-capi`, built as a static library and linked into
 the Go binary through cgo, wrapped by the importable Go package `noiseox` in `go/` (module
-`github.com/valsteen/noise-oxydation-claude/go`).
+`github.com/valsteen/noise-oxydation/go`).
 
 | Option | Why not chosen |
 | --- | --- |

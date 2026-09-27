@@ -66,7 +66,7 @@ pub(crate) const GO_PARITY_CARD: &str = "go-parity";
 pub(crate) const GO_REFERENCE_CARD: &str = "go-reference";
 
 /// Module path of the Go package in `go/`, as its `go.mod` declares it.
-pub(crate) const GO_PACKAGE_MODULE: &str = "github.com/valsteen/noise-oxydation-claude/go";
+pub(crate) const GO_PACKAGE_MODULE: &str = "github.com/valsteen/noise-oxydation/go";
 /// Card key of the Go package.
 pub(crate) const GO_PACKAGE_CARD: &str = "go-package";
 /// The workspace crate whose static library the Go package links through cgo.
@@ -151,7 +151,7 @@ pub(crate) const DIAGRAM: Diagram = Diagram {
             label: "Go package · go/",
             title: "noiseox",
             details: &["one Call per call, cgo hidden", "no allocation per packet"],
-            meta: &["github.com/valsteen/", "noise-oxydation-claude/go"],
+            meta: &["github.com/valsteen/", "noise-oxydation/go"],
             x: 24,
             y: 60,
             width: 288,

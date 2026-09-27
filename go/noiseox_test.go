@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	noiseox "github.com/valsteen/noise-oxydation-claude/go"
+	noiseox "github.com/valsteen/noise-oxydation/go"
 )
 
 type packet = [noiseox.PacketSize]byte

@@ -115,8 +115,8 @@ jobs:
           mkdir -p "$consumer"
           cd "$consumer"
           go mod init example.com/consumer
-          go mod edit -require=github.com/valsteen/noise-oxydation-claude/go@v0.0.0 \
-            -replace=github.com/valsteen/noise-oxydation-claude/go="$module"
+          go mod edit -require=github.com/valsteen/noise-oxydation/go@v0.0.0 \
+            -replace=github.com/valsteen/noise-oxydation/go="$module"
           cat > main.go <<'GO'
           package main
 
@@ -124,7 +124,7 @@ jobs:
           	"fmt"
           	"os"
 
-          	noiseox "github.com/valsteen/noise-oxydation-claude/go"
+          	noiseox "github.com/valsteen/noise-oxydation/go"
           )
 
           func main() {

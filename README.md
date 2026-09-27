@@ -121,18 +121,18 @@ This section adapts the Twilio Media Streams and reset guidance of the Go projec
 
 ## Using It From Go
 
-The Go package `noiseox` (module `github.com/valsteen/noise-oxydation-claude/go`, in [`go/`](go)) wraps the enhancer
+The Go package `noiseox` (module `github.com/valsteen/noise-oxydation/go`, in [`go/`](go)) wraps the enhancer
 behind a Go API that hides cgo: one `Call` per call, typed errors, and packet methods that pass your own fixed-size
 arrays and allocate nothing. It links the Rust library as a static library, so the Go binary stays self-contained.
 
 The shortest path from another Go program, on macOS or Linux with Go 1.24 or later and a C compiler:
 
 ```bash
-git clone git@github.com:valsteen/noise-oxydation-claude.git
-(cd noise-oxydation-claude && cargo build --locked --release -p noise-oxydation-capi)
+git clone --branch claude https://github.com/valsteen/noise-oxydation.git
+(cd noise-oxydation && cargo build --locked --release -p noise-oxydation-capi)
 cd your-service
-go mod edit -require=github.com/valsteen/noise-oxydation-claude/go@v0.0.0 \
-  -replace=github.com/valsteen/noise-oxydation-claude/go=../noise-oxydation-claude/go
+go mod edit -require=github.com/valsteen/noise-oxydation/go@v0.0.0 \
+  -replace=github.com/valsteen/noise-oxydation/go=../noise-oxydation/go
 CGO_ENABLED=1 go build ./...
 ```
 
@@ -157,7 +157,8 @@ n, err := call.Drain(&tail)
 // send tail[:n]
 ```
 
-Fetching the module with `go get` instead needs `GOPRIVATE` and `CGO_LDFLAGS=-L<checkout>/target/release`.
+Fetching the module with `go get github.com/valsteen/noise-oxydation/go@claude` instead needs
+`CGO_LDFLAGS=-L<checkout>/target/release`.
 [docs/go-integration.md](docs/go-integration.md) gives the exact macOS and Linux commands, the API and errors, the
 lifecycle and concurrency rules, and the call-stream example `go/examples/callstream`. Seen from Go, a packet costs the
 same as in Rust within measurement spread, one Go-to-Rust call costs about 28 ns, and the output is byte-identical.

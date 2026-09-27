@@ -1,6 +1,6 @@
 # Go Integration
 
-A Go program uses the enhancer through the Go package `noiseox`, module `github.com/valsteen/noise-oxydation-claude/go`
+A Go program uses the enhancer through the Go package `noiseox`, module `github.com/valsteen/noise-oxydation/go`
 in [`go/`](../go). The package links the Rust library as a static library through a small C ABI crate,
 [`crates/bindings/noise-oxydation-capi`](../crates/bindings/noise-oxydation-capi), and hides every cgo detail: a Go
 caller sees Go types, one `Call` per telephone call, typed errors, and packet methods that allocate nothing. The output
@@ -90,15 +90,16 @@ go run ./examples/callstream -synthetic 3000
 
 ### From another Go program
 
-The shortest path uses a checkout of this repository and a `replace` directive. It works the same on macOS and Linux:
+The code is published on the `claude` branch of the public repository `github.com/valsteen/noise-oxydation`. The
+shortest path uses a checkout of that branch and a `replace` directive. It works the same on macOS and Linux:
 
 ```bash
-git clone git@github.com:valsteen/noise-oxydation-claude.git
-cd noise-oxydation-claude
+git clone --branch claude https://github.com/valsteen/noise-oxydation.git
+cd noise-oxydation
 cargo build --locked --release -p noise-oxydation-capi
 cd ../your-service
-go mod edit -require=github.com/valsteen/noise-oxydation-claude/go@v0.0.0 \
-  -replace=github.com/valsteen/noise-oxydation-claude/go=../noise-oxydation-claude/go
+go mod edit -require=github.com/valsteen/noise-oxydation/go@v0.0.0 \
+  -replace=github.com/valsteen/noise-oxydation/go=../noise-oxydation/go
 CGO_ENABLED=1 go build ./...
 ```
 
@@ -106,15 +107,13 @@ With the replace directive the package finds the library in the checkout's `targ
 separate consumer module against a copy of the package placed outside the checkout, where that built-in path finds
 nothing and only `CGO_LDFLAGS`, set as below, locates the library: the same situation as a module in the module cache.
 
-To fetch the module from GitHub instead, the repository being private, tell Go not to use the public proxy and checksum
-database, and give Git access to it. The module cache holds only the Go sources, so the static library still comes
-from a checkout of the same commit, and `CGO_LDFLAGS` points at it:
+To fetch the module with `go get` instead, name the `claude` branch, where this code is published, or a commit on it.
+The module cache holds only the Go sources, so the static library still comes from a checkout of the same commit, and
+`CGO_LDFLAGS` points at it:
 
 ```bash
-export GOPRIVATE=github.com/valsteen/noise-oxydation-claude
-git config --global url."git@github.com:".insteadOf "https://github.com/"   # or another credential setup
-go get github.com/valsteen/noise-oxydation-claude/go@<commit>
-CGO_ENABLED=1 CGO_LDFLAGS="-L/path/to/noise-oxydation-claude/target/release" go build ./...
+go get github.com/valsteen/noise-oxydation/go@claude   # or @<commit>
+CGO_ENABLED=1 CGO_LDFLAGS="-L/path/to/noise-oxydation/target/release" go build ./...
 ```
 
 Build the library from the commit the module version names: the header in the module and the library must describe
@@ -128,7 +127,7 @@ it is not covered here.
 ## API
 
 ```go
-import noiseox "github.com/valsteen/noise-oxydation-claude/go"
+import noiseox "github.com/valsteen/noise-oxydation/go"
 
 func DefaultConfig() Config
 func New(config Config) (*Call, error)

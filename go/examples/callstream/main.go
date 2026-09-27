@@ -35,7 +35,7 @@ import (
 	"sync"
 	"time"
 
-	noiseox "github.com/valsteen/noise-oxydation-claude/go"
+	noiseox "github.com/valsteen/noise-oxydation/go"
 )
 
 // silence is the mu-law code of a zero sample.
