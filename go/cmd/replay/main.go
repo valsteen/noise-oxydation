@@ -33,6 +33,18 @@ func run(inputPath, outputPath string, estimator noise.Estimator) (err error) {
 		return err
 	}
 	defer in.Close()
+	inputInfo, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	outputInfo, statErr := os.Stat(outputPath)
+	if statErr == nil {
+		if os.SameFile(inputInfo, outputInfo) {
+			return fmt.Errorf("input and output identify the same file: %q", outputPath)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
 	out, err := os.Create(outputPath)
 	if err != nil {
 		return err
