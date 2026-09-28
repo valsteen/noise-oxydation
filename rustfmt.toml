@@ -1,0 +1,9 @@
+# Formatter option values are sourced from /Users/vincentalsteen/projects/bitwig-remote-project/client/rustfmt.toml.
+format_strings = true
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"
+max_width = 120
+reorder_impl_items = true
+reorder_imports = true
+reorder_modules = true
+use_small_heuristics = "Max"

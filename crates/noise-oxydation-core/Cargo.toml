@@ -1,0 +1,13 @@
+[package]
+name = "noise-oxydation-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Bounded 8 kHz G.711 μ-law packet enhancement"
+
+[dependencies]
+realfft = "3.4"
+
+[lints]
+workspace = true

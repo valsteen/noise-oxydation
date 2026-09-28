@@ -1,0 +1,25 @@
+name: Rust CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - luna
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install accepted Rust toolchains
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component clippy
+          rustup toolchain install nightly-2026-09-25 --profile minimal --component rustfmt
+      - name: Check formatting
+        run: cargo +nightly-2026-09-25 fmt --all -- --check
+      - name: Run Clippy
+        run: cargo +1.98.1 clippy --workspace --all-targets --locked -- -D warnings -D clippy::pedantic
+      - name: Run tests
+        run: cargo +1.98.1 test --workspace --locked
+      - name: Build workspace
+        run: cargo +1.98.1 build --workspace --locked
