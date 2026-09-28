@@ -13,6 +13,9 @@ The comparison source is `github.com/sghaida/noise-cancelation` at commit `cfc75
 | At the 40,000-sample intro boundary, 311 complete 256-sample windows with a 128-sample hop lie wholly inside. | Static arithmetic | A separate reference helper rounds to 313. This Rust crate uses the complete-window rule. |
 | Speech in the quiet intro can enter the noise estimate and later be suppressed. | Source-based inference | This is not a measured speech result. |
 | Rust behavior is numerically equivalent to Go. | Not established | No audio parity measurement is claimed. |
+| The public Rust processor improved one OpenSLR utterance after adding deterministic synthetic noise. | Measured example run | The noisy input and enhanced output are compared with the same clean samples; results and listening status are recorded in [`REPLAY.md`](REPLAY.md). This is not general speech-quality or natural-noise evidence. |
+| A processor push fits within the 20 ms packet cadence on the documented host. | Measured example run | The release replay observed a 91,792 ns maximum over 1,083 pushes, about 0.46% of the cadence on one Mac Studio M1 Ultra. This host result is not a scheduling guarantee. |
+| Portable SIMD or minitrace provides a useful measured end-to-end benefit. | Not established | No SIMD candidate or minitrace comparison was run; neither was added. The replay profile does not measure end-to-end scheduling. |
 
 ## Estimator and suppression provenance
 
@@ -28,3 +31,5 @@ The comparison source is `github.com/sghaida/noise-cancelation` at commit `cfc75
 The Rust pipeline sends frame power to the selected estimator and tonal detector independently. Selected noise PSD and observed power feed decision-directed SNR and Log-MMSE; tonal gain multiplies the Log-MMSE spectrum before inverse transform and overlap-add. With no complete quiet-intro frame, Rust initializes MCRA from the first active frame so each selection has a finite starting estimate; the pinned MCRA estimator instead stays uninitialized without a baseline. These comparisons establish provenance only and do not establish numerical parity or speech quality.
 
 The Rust processor deliberately preserves one valid output sample per accepted input sample after drain. Its 256-sample startup buffering and second-packet first output are frame arithmetic, not measured end-to-end latency. Its allocator test observes initialized push and drain in this crate; it is not a Go benchmark comparison.
+
+The offline replay's source attribution, deterministic mix, exact alignment, metric definitions and observations are in [`REPLAY.md`](REPLAY.md). Audio files are external temporary outputs and are not checked in. Playback of both recorded waveforms was completed and confirmed as fine; no subjective speech-quality assessment was made, and calculated metrics do not substitute for one.

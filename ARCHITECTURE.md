@@ -12,6 +12,8 @@ The core crate owns packet framing, codec conversion, filter state, the fixed pe
 
 Processor construction may allocate while it prepares transform plans and buffers. After construction, push and drain use fixed-size state and caller-owned output storage. They perform no file or network I/O, wait on no synchronization, and allocate no memory. Independent calls use independent processors and share no mutable signal state.
 
+The standard-library `examples/replay.rs` owner handles offline WAV parsing and writing, PCM-to-μ-law conversion, deterministic noise generation, source/output alignment, metrics, and optional timing and allocation instrumentation. It processes the same public 160-byte packet API as a caller, in order, and drains once; all diagnostics and file effects remain outside initialized `Processor` calls. Its outputs live in a newly created directory under the OS temporary root, and it rejects a temporary root that resolves inside the Git checkout. The optional `performance-analysis` Cargo feature instruments the example only and adds no runtime dependency or processor callback.
+
 The caller owns packet order, output storage, processor lifetime, and the choice of quiet-intro duration. A capacity error reports the exact requirement before input or state is changed. The public lifecycle rejects pushes after drain, returns an empty result on repeated drain, and lets reset begin a new call while deliberately dropping any unreturned tail.
 
 ## Calibration and estimator selection
@@ -20,4 +22,4 @@ The caller owns packet order, output storage, processor lifetime, and the choice
 
 ## Current boundary
 
-The workspace contains one production crate with selectable minimum-noise, MCRA, and SPP-MMSE estimation followed by shared decision-directed Log-MMSE and tonal-transient suppression. Real-speech replay and quality evidence, performance analysis, vectorization, and application or Go integration remain separate accepted work. The Rust API preserves valid input sample cardinality; no numerical parity with the pinned Go implementation is claimed.
+The workspace contains one production crate with selectable minimum-noise, MCRA, and SPP-MMSE estimation followed by shared decision-directed Log-MMSE and tonal-transient suppression. Offline replay and host-specific performance evidence are provided by a dependency-free example, not by the installed library. The replay covers one attributed speech utterance with synthetic noise; it does not establish general speech quality, natural-noise robustness, end-to-end scheduling performance, or numerical parity with the pinned Go implementation. SIMD, tracing, and application or Go integration remain outside the current implementation.

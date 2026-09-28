@@ -24,6 +24,12 @@ The default quiet intro is exactly 40,000 samples (five seconds). `Processor::wi
 
 Create the processor before entering the packet-processing path. Construction prepares FFT plans and reusable buffers and may allocate. Initialized pushes and drains use bounded preallocated storage without blocking or allocating. Each processor owns its mutable signal state; use separate processors for independent calls.
 
+## Offline replay
+
+The `noise-oxydation-core` replay example reads a PCM16 mono 8 kHz WAV converted from the attributed OpenSLR SLR31 utterance documented in [`docs/REPLAY.md`](docs/REPLAY.md). It generates a fixed-seed synthetic-noise prefix and aligned noisy speech, then sends ordered 160-byte μ-law packets through the public default `Processor` and drains once. The example writes noisy and enhanced WAVs under the OS temporary directory and prints input and output speech metrics. Source and rendered audio remain outside the checkout. File access, logging, timing, allocation counting and metrics stay in the example, outside initialized `push_packet` and `drain`.
+
+Run ordinary replay with `cargo +1.98.1 run --release --locked --package noise-oxydation-core --example replay -- /path/to/clean.wav`; add `--quiet` after the WAV path to suppress progress messages. The opt-in `performance-analysis` feature adds `--profile` for release push/drain timing and a separate allocation-counting pass. The one-sample metrics and host-specific timings in the replay guide are evidence for this synthetic mix and host, not general speech-quality or real-time guarantees.
+
 ## Checks
 
 The repository pins stable Rust 1.98.1 for build, test, and Clippy. Rust formatting uses nightly-2026-09-25 with the settings recorded in `rustfmt.toml`.
@@ -35,4 +41,4 @@ cargo +1.98.1 test --workspace --locked
 cargo +1.98.1 build --workspace --locked
 ```
 
-The noise estimators and suppression stages are implementation evidence, not a claim of Go numerical parity or measured speech quality. Real-speech replay and quality evidence remain later accepted work; Go integration remains separate.
+The noise estimators and suppression stages are implementation evidence, not a claim of Go numerical parity. The offline replay provides one attributed utterance's synthetic-noise metrics; it does not establish general speech quality, natural-noise robustness, or numerical parity with Go. Go integration remains separate.

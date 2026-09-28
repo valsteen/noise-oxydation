@@ -6,6 +6,9 @@ rust-version = "1.85"
 license = "MIT"
 description = "Bounded 8 kHz G.711 μ-law packet enhancement"
 
+[features]
+performance-analysis = []
+
 [dependencies]
 realfft = "3.4"
 
