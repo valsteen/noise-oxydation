@@ -2,6 +2,8 @@
 
 This crate enhances an 8 kHz stream carried as G.711 μ-law packets. A caller creates one `Processor` per call, reuses its input and output storage, pushes packets in order, and drains once the stream ends.
 
+Follow the [How It Works guide](HOW_IT_WORKS.md) for the crate boundary, packet path, and per-call sequencing.
+
 ## Processing path
 
 The processor decodes each 160-byte packet to PCM, applies an 80 Hz high-pass filter, and analyzes 256-sample Hann windows with a 128-sample hop. Frame power feeds one selected noise estimator and the tonal-transient detector. After the quiet intro, observed power and the selected noise estimate feed decision-directed SNR and Log-MMSE suppression; the detector then applies its gain to the suppressed spectrum. Inverse transforms are overlap-added, and the result is encoded back to μ-law bytes.
