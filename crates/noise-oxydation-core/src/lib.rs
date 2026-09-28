@@ -1,9 +1,9 @@
 //! Bounded, call-local enhancement for 8 kHz G.711 μ-law packets.
 //!
-//! Each processor owns its transform plans, filter history, calibration
-//! estimate, and overlap buffers. Callers provide all packet and output
-//! storage. Processing a packet or draining an initialized processor does not
-//! allocate or wait on synchronization.
+//! Each processor owns its transform plans, filter history, selected noise
+//! estimator, suppression state, calibration, and overlap buffers. Callers
+//! provide all packet and output storage. Processing a packet or draining an
+//! initialized processor does not allocate or wait on synchronization.
 
 use std::{f32::consts::PI, sync::Arc, time::Duration};
 
@@ -21,10 +21,21 @@ pub const MAX_DRAIN_OUTPUT_BYTES: usize = 255;
 const FRAME_SIZE: usize = 256;
 const HOP_SIZE: usize = 128;
 const SPECTRUM_BINS: usize = FRAME_SIZE / 2 + 1;
+const MINIMUM_NOISE_WINDOW: usize = 50;
 const DEFAULT_CALIBRATION_SAMPLES: u128 = 40_000;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
-const MINIMUM_GAIN: f32 = 0.1;
-const NOISE_THRESHOLD: f32 = 2.0;
+const POWER_FLOOR: f32 = 1e-12;
+
+/// The noise estimator fixed for one processor call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoiseEstimator {
+    /// The README-specified smoothed minimum estimator; this is the default.
+    MinimumNoise,
+    /// Minimum controlled recursive averaging.
+    Mcra,
+    /// Speech-presence-probability MMSE estimation.
+    SppMmse,
+}
 
 /// A packet processor rejection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,8 +84,12 @@ pub struct Processor {
     overlap_weight: [f32; FRAME_SIZE],
     input: [f32; FRAME_SIZE],
     pending_len: usize,
-    noise_floor: [f32; SPECTRUM_BINS],
-    noise_trained: bool,
+    power: [f32; SPECTRUM_BINS],
+    noise_psd: [f32; SPECTRUM_BINS],
+    noise_estimator: NoiseEstimatorState,
+    previous_clean_snr: [f32; SPECTRUM_BINS],
+    snr_initialized: bool,
+    tonal: TonalState,
     calibration_samples: u128,
     frame_start: u128,
     accepted_samples: u128,
@@ -87,14 +102,14 @@ impl Processor {
     /// Creates a processor with the five-second, 40,000-sample quiet intro.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_calibration_samples(DEFAULT_CALIBRATION_SAMPLES)
+        Self::with_configuration(DEFAULT_CALIBRATION_SAMPLES, NoiseEstimator::MinimumNoise)
     }
 
     /// Creates a processor with a configurable quiet-intro duration.
     ///
     /// Durations are converted to 8 kHz samples by rounding down to the nearest
     /// sample. Only complete 256-sample analysis windows wholly inside this
-    /// interval train the minimum-noise estimate.
+    /// interval train the selected estimator.
     ///
     /// # Errors
     ///
@@ -106,10 +121,34 @@ impl Processor {
             .checked_mul(8_000)
             .map(|value| value / NANOS_PER_SECOND)
             .ok_or(ProcessorError::CalibrationDurationTooLong)?;
-        Ok(Self::with_calibration_samples(samples))
+        Ok(Self::with_configuration(samples, NoiseEstimator::MinimumNoise))
     }
 
-    fn with_calibration_samples(calibration_samples: u128) -> Self {
+    /// Creates a processor using one estimator and the default quiet intro.
+    #[must_use]
+    pub fn with_estimator(estimator: NoiseEstimator) -> Self {
+        Self::with_configuration(DEFAULT_CALIBRATION_SAMPLES, estimator)
+    }
+
+    /// Creates a processor using one estimator and a configurable quiet intro.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ProcessorError::CalibrationDurationTooLong` when the duration
+    /// cannot be represented in the processor's sample counter.
+    pub fn with_estimator_and_quiet_intro(
+        estimator: NoiseEstimator,
+        duration: Duration,
+    ) -> Result<Self, ProcessorError> {
+        let samples = duration
+            .as_nanos()
+            .checked_mul(8_000)
+            .map(|value| value / NANOS_PER_SECOND)
+            .ok_or(ProcessorError::CalibrationDurationTooLong)?;
+        Ok(Self::with_configuration(samples, estimator))
+    }
+
+    fn with_configuration(calibration_samples: u128, estimator: NoiseEstimator) -> Self {
         let mut planner = RealFftPlanner::<f32>::new();
         let forward = planner.plan_fft_forward(FRAME_SIZE);
         let inverse = planner.plan_fft_inverse(FRAME_SIZE);
@@ -130,8 +169,12 @@ impl Processor {
             overlap_weight: [0.0; FRAME_SIZE],
             input: [0.0; FRAME_SIZE],
             pending_len: 0,
-            noise_floor: [f32::INFINITY; SPECTRUM_BINS],
-            noise_trained: false,
+            power: [0.0; SPECTRUM_BINS],
+            noise_psd: [POWER_FLOOR; SPECTRUM_BINS],
+            noise_estimator: NoiseEstimatorState::new(estimator),
+            previous_clean_snr: [0.0; SPECTRUM_BINS],
+            snr_initialized: false,
+            tonal: TonalState::new(),
             calibration_samples,
             frame_start: 0,
             accepted_samples: 0,
@@ -220,14 +263,22 @@ impl Processor {
         Ok(output_len)
     }
 
-    /// Discards pending samples and resets filter, transform, gate, and stream state.
+    /// Discards pending samples and resets filter, transform, estimator, suppression, and stream state.
     pub fn reset(&mut self) {
+        self.fft_input.fill(0.0);
+        self.spectrum.fill(Complex::new(0.0, 0.0));
+        self.forward_scratch.fill(Complex::new(0.0, 0.0));
+        self.inverse_scratch.fill(Complex::new(0.0, 0.0));
         self.overlap.fill(0.0);
         self.overlap_weight.fill(0.0);
         self.input.fill(0.0);
         self.pending_len = 0;
-        self.noise_floor.fill(f32::INFINITY);
-        self.noise_trained = false;
+        self.power.fill(0.0);
+        self.noise_psd.fill(POWER_FLOOR);
+        self.noise_estimator.reset();
+        self.previous_clean_snr.fill(0.0);
+        self.snr_initialized = false;
+        self.tonal.reset();
         self.frame_start = 0;
         self.accepted_samples = 0;
         self.emitted_samples = 0;
@@ -246,17 +297,16 @@ impl Processor {
         let frame_end = self.frame_start + FRAME_SIZE as u128;
         let complete_input_window = frame_end <= self.accepted_samples;
         let calibration_window = frame_end <= self.calibration_samples && complete_input_window;
-        if calibration_window {
-            for (noise, frequency) in self.noise_floor.iter_mut().zip(&self.spectrum) {
-                *noise = noise.min(frequency.norm_sqr());
-            }
-            self.noise_trained = true;
-        } else if self.frame_start >= self.calibration_samples && self.noise_trained {
-            for (noise, frequency) in self.noise_floor.iter().zip(&mut self.spectrum) {
-                if frequency.norm_sqr() < NOISE_THRESHOLD * noise {
-                    *frequency *= MINIMUM_GAIN;
-                }
-            }
+        let suppress = frame_end > self.calibration_samples;
+        for (power, frequency) in self.power.iter_mut().zip(&self.spectrum) {
+            *power = frequency.norm_sqr();
+        }
+        self.noise_estimator.process(&self.power, calibration_window, suppress, &mut self.noise_psd);
+        if suppress {
+            self.apply_log_mmse();
+        }
+        if calibration_window || suppress {
+            self.tonal.process(&self.power, &mut self.spectrum, suppress);
         }
 
         self.inverse
@@ -271,6 +321,28 @@ impl Processor {
             self.overlap[index] += self.fft_input[index] * inverse_scale * window;
             self.overlap_weight[index] += window * window;
         }
+    }
+
+    fn apply_log_mmse(&mut self) {
+        for index in 0..SPECTRUM_BINS {
+            let observed_power = self.power[index].max(0.0);
+            let effective_noise = (self.noise_psd[index].max(POWER_FLOOR) * 1.25).max(POWER_FLOOR);
+            let gamma = f64::from(observed_power) / f64::from(effective_noise);
+            let instantaneous_xi = (gamma - 1.0).max(0.0);
+            let xi = if self.snr_initialized {
+                0.98 * f64::from(self.previous_clean_snr[index]) + 0.02 * instantaneous_xi
+            } else {
+                instantaneous_xi
+            };
+            let v = (gamma * xi / (1.0 + xi)).max(f64::from(POWER_FLOOR));
+            let gain = (xi / (1.0 + xi) * (0.5 * exp_integral_e1(v)).exp()).clamp(0.05, 1.0);
+            #[allow(clippy::cast_possible_truncation)]
+            let gain = gain as f32;
+            let clean_power = gain * gain * observed_power;
+            self.spectrum[index] *= gain;
+            self.previous_clean_snr[index] = clean_power / effective_noise;
+        }
+        self.snr_initialized = true;
     }
 
     fn write_frame(&mut self, output: &mut [u8], offset: usize, count: usize) {
@@ -296,6 +368,470 @@ impl Default for Processor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+enum NoiseEstimatorState {
+    MinimumNoise(Box<MinimumNoiseState>),
+    Mcra(Box<McraState>),
+    SppMmse(Box<SppMmseState>),
+}
+
+impl NoiseEstimatorState {
+    fn new(estimator: NoiseEstimator) -> Self {
+        match estimator {
+            NoiseEstimator::MinimumNoise => Self::MinimumNoise(Box::new(MinimumNoiseState::new())),
+            NoiseEstimator::Mcra => Self::Mcra(Box::new(McraState::new())),
+            NoiseEstimator::SppMmse => Self::SppMmse(Box::new(SppMmseState::new())),
+        }
+    }
+
+    fn process(
+        &mut self,
+        power: &[f32; SPECTRUM_BINS],
+        calibration: bool,
+        active: bool,
+        noise: &mut [f32; SPECTRUM_BINS],
+    ) {
+        match self {
+            Self::MinimumNoise(state) => state.process(power, calibration || active, noise),
+            Self::Mcra(state) => state.process(power, calibration, active, noise),
+            Self::SppMmse(state) => state.process(power, calibration, active, noise),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            Self::MinimumNoise(state) => state.reset(),
+            Self::Mcra(state) => state.reset(),
+            Self::SppMmse(state) => state.reset(),
+        }
+    }
+}
+
+struct MinimumNoiseState {
+    history: Vec<[f32; SPECTRUM_BINS]>,
+    smoothed: [f32; SPECTRUM_BINS],
+    cursor: usize,
+    initialized: bool,
+}
+
+impl MinimumNoiseState {
+    fn new() -> Self {
+        Self {
+            history: vec![[f32::INFINITY; SPECTRUM_BINS]; MINIMUM_NOISE_WINDOW],
+            smoothed: [0.0; SPECTRUM_BINS],
+            cursor: 0,
+            initialized: false,
+        }
+    }
+
+    fn process(&mut self, power: &[f32; SPECTRUM_BINS], update: bool, noise: &mut [f32; SPECTRUM_BINS]) {
+        if !update {
+            return;
+        }
+        for index in 0..SPECTRUM_BINS {
+            let observed = power[index].max(0.0);
+            self.smoothed[index] =
+                if self.initialized { 0.8 * self.smoothed[index] + 0.2 * observed } else { observed };
+            self.history[self.cursor][index] = self.smoothed[index];
+            noise[index] = self.history.iter().map(|row| row[index]).fold(f32::INFINITY, f32::min).max(POWER_FLOOR);
+        }
+        self.cursor = (self.cursor + 1) % MINIMUM_NOISE_WINDOW;
+        self.initialized = true;
+    }
+
+    fn reset(&mut self) {
+        self.history.fill([f32::INFINITY; SPECTRUM_BINS]);
+        self.smoothed.fill(0.0);
+        self.cursor = 0;
+        self.initialized = false;
+    }
+}
+
+struct McraState {
+    baseline_sum: [f64; SPECTRUM_BINS],
+    noise: [f32; SPECTRUM_BINS],
+    smoothed: [f32; SPECTRUM_BINS],
+    current_minimum: [f32; SPECTRUM_BINS],
+    previous_minimum: [f32; SPECTRUM_BINS],
+    speech_probability: [f32; SPECTRUM_BINS],
+    baseline_frames: usize,
+    frames_in_window: usize,
+    initialized: bool,
+}
+
+impl McraState {
+    fn new() -> Self {
+        Self {
+            baseline_sum: [0.0; SPECTRUM_BINS],
+            noise: [POWER_FLOOR; SPECTRUM_BINS],
+            smoothed: [0.0; SPECTRUM_BINS],
+            current_minimum: [f32::INFINITY; SPECTRUM_BINS],
+            previous_minimum: [f32::INFINITY; SPECTRUM_BINS],
+            speech_probability: [0.0; SPECTRUM_BINS],
+            baseline_frames: 0,
+            frames_in_window: 0,
+            initialized: false,
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn process(
+        &mut self,
+        power: &[f32; SPECTRUM_BINS],
+        calibration: bool,
+        active: bool,
+        output: &mut [f32; SPECTRUM_BINS],
+    ) {
+        if !calibration && !active {
+            output.copy_from_slice(&self.noise);
+            return;
+        }
+        if calibration {
+            self.baseline_frames += 1;
+            let count = self.baseline_frames as f64;
+            for index in 0..SPECTRUM_BINS {
+                let value = f64::from(power[index].max(POWER_FLOOR));
+                self.baseline_sum[index] += value;
+                let mean = (self.baseline_sum[index] / count).max(f64::from(POWER_FLOOR));
+                #[allow(clippy::cast_possible_truncation)]
+                let mean = mean as f32;
+                self.noise[index] = mean;
+                self.smoothed[index] = mean;
+                self.current_minimum[index] = mean;
+                self.previous_minimum[index] = mean;
+                self.speech_probability[index] = 0.0;
+                output[index] = mean;
+            }
+            self.initialized = true;
+            return;
+        }
+
+        if !self.initialized {
+            for index in 0..SPECTRUM_BINS {
+                let value = power[index].max(POWER_FLOOR);
+                self.noise[index] = value;
+                self.smoothed[index] = value;
+                self.current_minimum[index] = value;
+                self.previous_minimum[index] = value;
+                self.speech_probability[index] = 0.0;
+                output[index] = value;
+            }
+            self.initialized = true;
+            return;
+        }
+
+        for index in 0..SPECTRUM_BINS {
+            let observed = power[index].max(POWER_FLOOR);
+            self.smoothed[index] = 0.8 * self.smoothed[index] + 0.2 * observed;
+            self.current_minimum[index] = self.current_minimum[index].min(self.smoothed[index]);
+            let minimum = self.current_minimum[index].min(self.previous_minimum[index]).max(POWER_FLOOR);
+            let indicator = if self.smoothed[index] / minimum > 5.0 { 1.0 } else { 0.0 };
+            self.speech_probability[index] = 0.2 * self.speech_probability[index] + 0.8 * indicator;
+            let adaptive_alpha = 0.95 + 0.05 * self.speech_probability[index];
+            self.noise[index] =
+                (adaptive_alpha * self.noise[index] + (1.0 - adaptive_alpha) * observed).max(POWER_FLOOR);
+            output[index] = self.noise[index];
+        }
+        self.frames_in_window += 1;
+        if self.frames_in_window == MINIMUM_NOISE_WINDOW {
+            self.previous_minimum.copy_from_slice(&self.current_minimum);
+            self.current_minimum.fill(f32::INFINITY);
+            self.frames_in_window = 0;
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+struct SppMmseState {
+    baseline_sum: [f64; SPECTRUM_BINS],
+    noise: [f32; SPECTRUM_BINS],
+    speech_probability: [f32; SPECTRUM_BINS],
+    smoothed_probability: [f32; SPECTRUM_BINS],
+    baseline_frames: usize,
+    initialized: bool,
+}
+
+impl SppMmseState {
+    fn new() -> Self {
+        Self {
+            baseline_sum: [0.0; SPECTRUM_BINS],
+            noise: [POWER_FLOOR; SPECTRUM_BINS],
+            speech_probability: [0.0; SPECTRUM_BINS],
+            smoothed_probability: [0.0; SPECTRUM_BINS],
+            baseline_frames: 0,
+            initialized: false,
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn process(
+        &mut self,
+        power: &[f32; SPECTRUM_BINS],
+        calibration: bool,
+        active: bool,
+        output: &mut [f32; SPECTRUM_BINS],
+    ) {
+        if !calibration && !active {
+            output.copy_from_slice(&self.noise);
+            return;
+        }
+        if calibration {
+            self.baseline_frames += 1;
+            let count = self.baseline_frames as f64;
+            for index in 0..SPECTRUM_BINS {
+                let observed = f64::from(power[index].max(POWER_FLOOR));
+                self.baseline_sum[index] += observed;
+                let mean = (self.baseline_sum[index] / count).min(f64::from(f32::MAX));
+                #[allow(clippy::cast_possible_truncation)]
+                let mean = mean as f32;
+                self.noise[index] = mean.max(POWER_FLOOR);
+                self.speech_probability[index] = 0.0;
+                self.smoothed_probability[index] = 0.0;
+                output[index] = self.noise[index];
+            }
+            self.initialized = true;
+            return;
+        }
+
+        if !self.initialized {
+            for index in 0..SPECTRUM_BINS {
+                let value = power[index].max(POWER_FLOOR);
+                self.noise[index] = value;
+                self.speech_probability[index] = 0.0;
+                self.smoothed_probability[index] = 0.0;
+                output[index] = value;
+            }
+            self.initialized = true;
+            return;
+        }
+
+        for index in 0..SPECTRUM_BINS {
+            let observed = power[index].max(POWER_FLOOR);
+            let previous_noise = self.noise[index].max(POWER_FLOOR);
+            let gamma = observed / previous_noise;
+            let fixed_prior_snr = 31.622_776_f32;
+            let probability =
+                (1.0 + (1.0 + fixed_prior_snr) * (-gamma * fixed_prior_snr / (1.0 + fixed_prior_snr)).exp()).recip();
+            let probability = probability.clamp(0.0, 1.0);
+            self.smoothed_probability[index] = 0.9 * self.smoothed_probability[index] + 0.1 * probability;
+            let probability = if self.smoothed_probability[index] > 0.99 && probability > 0.99 {
+                probability.min(0.99)
+            } else {
+                probability
+            };
+            self.speech_probability[index] = probability;
+            let conditional_noise = (1.0 - probability) * observed + probability * previous_noise;
+            self.noise[index] = (0.8 * previous_noise + 0.2 * conditional_noise).max(POWER_FLOOR);
+            output[index] = self.noise[index];
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+struct TonalState {
+    previous_power: [f32; SPECTRUM_BINS],
+    gain: [f32; SPECTRUM_BINS],
+    initialized: bool,
+}
+
+impl TonalState {
+    fn new() -> Self {
+        Self { previous_power: [POWER_FLOOR; SPECTRUM_BINS], gain: [1.0; SPECTRUM_BINS], initialized: false }
+    }
+
+    fn process(&mut self, power: &[f32; SPECTRUM_BINS], spectrum: &mut [Complex<f32>], apply_gain: bool) {
+        if !self.initialized {
+            for (previous, observed) in self.previous_power.iter_mut().zip(power) {
+                *previous = observed.max(POWER_FLOOR);
+            }
+            self.initialized = true;
+            return;
+        }
+
+        let mut target_gain = [1.0_f32; SPECTRUM_BINS];
+        for index in 64..SPECTRUM_BINS - 2 {
+            let center = power[index].max(POWER_FLOOR);
+            let mut is_peak = true;
+            for (neighbor_index, neighbor_power) in power.iter().enumerate().take(index + 3).skip(index - 2) {
+                if neighbor_index != index {
+                    let neighbor = neighbor_power.max(POWER_FLOOR);
+                    is_peak &= neighbor <= center;
+                }
+            }
+            if !is_peak {
+                continue;
+            }
+
+            let mut background_power = 0.0_f32;
+            let mut background_count = 0.0_f32;
+            for (candidate, candidate_power) in
+                power.iter().enumerate().take((index + 6).min(SPECTRUM_BINS - 1) + 1).skip(index.saturating_sub(6))
+            {
+                if index.abs_diff(candidate) <= 2 {
+                    continue;
+                }
+                background_power += candidate_power.max(POWER_FLOOR);
+                background_count += 1.0;
+            }
+            let background = background_power / background_count;
+            let prominence_db = 10.0 * (center / background.max(POWER_FLOOR)).log10();
+            let tonal_score = normalize_score(prominence_db, 5.0, 14.0);
+            if tonal_score <= 0.0 {
+                continue;
+            }
+
+            let flux_db =
+                (10.0 * (center.max(POWER_FLOOR) / self.previous_power[index].max(POWER_FLOOR)).log10()).max(0.0);
+            let flux_score = normalize_score(flux_db, 3.0, 18.0);
+            let start = index.saturating_sub(6);
+            let end = (index + 6).min(SPECTRUM_BINS - 1);
+            let mut previous_peak = index;
+            let mut previous_peak_power = 0.0_f32;
+            for candidate in start..=end {
+                let candidate_power = self.previous_power[candidate].max(POWER_FLOOR);
+                if candidate_power > previous_peak_power {
+                    previous_peak = candidate;
+                    previous_peak_power = candidate_power;
+                }
+            }
+            let movement_score = if previous_peak_power < center * 0.1 {
+                0.0
+            } else {
+                normalize_score(
+                    f32::from(
+                        u8::try_from(index.abs_diff(previous_peak)).expect("movement search spans at most six bins"),
+                    ),
+                    1.0,
+                    4.0,
+                )
+            };
+            let harmonic = Self::harmonic_support(power, index, center);
+            let persistent_score = 0.35 * tonal_score;
+            let temporal_score = flux_score.max(movement_score).max(persistent_score);
+            let score = (tonal_score * temporal_score * (1.0 - harmonic)).clamp(0.0, 1.0);
+            let center_gain = (1.0 - 0.5 * score).max(0.5);
+            for (candidate, target) in target_gain.iter_mut().enumerate().take(index + 3).skip(index - 2) {
+                let distance = index.abs_diff(candidate);
+                let weight = f32::from(u8::try_from(3 - distance).expect("spread radius is two bins")) / 3.0;
+                let neighbor_gain = 1.0 - (1.0 - center_gain) * weight;
+                *target = target.min(neighbor_gain);
+            }
+        }
+
+        for index in 0..SPECTRUM_BINS {
+            let previous = self.gain[index];
+            let target = target_gain[index];
+            self.gain[index] =
+                if target < previous { 0.3 * previous + 0.7 * target } else { 0.85 * previous + 0.15 * target }
+                    .clamp(0.5, 1.0);
+            if apply_gain {
+                spectrum[index] *= self.gain[index];
+            }
+            self.previous_power[index] = power[index].max(POWER_FLOOR);
+        }
+    }
+
+    fn harmonic_support(power: &[f32; SPECTRUM_BINS], index: usize, center: f32) -> f32 {
+        if center <= POWER_FLOOR {
+            return 0.0;
+        }
+        let targets = [
+            index / 2 + usize::from(2 * (index % 2) >= 2),
+            index / 3 + usize::from(2 * (index % 3) >= 3),
+            index / 4 + usize::from(2 * (index % 4) >= 4),
+            index * 2,
+            index * 3,
+            index * 4,
+        ];
+        let mut seen = [usize::MAX; 6];
+        let mut seen_count = 0;
+        let mut support = 0.0_f32;
+        for target in targets {
+            if target == 0 || target >= SPECTRUM_BINS || seen[..seen_count].contains(&target) {
+                continue;
+            }
+            seen[seen_count] = target;
+            seen_count += 1;
+            let start = target.saturating_sub(1);
+            let end = (target + 1).min(SPECTRUM_BINS - 1);
+            let related = power[start..=end].iter().copied().fold(POWER_FLOOR, f32::max);
+            support = support.max((related / (0.15 * center)).clamp(0.0, 1.0));
+        }
+        support
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+fn normalize_score(value: f32, start: f32, full: f32) -> f32 {
+    if value <= start {
+        0.0
+    } else if value >= full {
+        1.0
+    } else {
+        (value - start) / (full - start)
+    }
+}
+
+fn exp_integral_e1(value: f64) -> f64 {
+    const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+    const EPSILON: f64 = 1e-14;
+    const FP_MIN: f64 = 1e-300;
+    const MAX_ITERATIONS: usize = 100;
+
+    if value <= 0.0 {
+        return f64::INFINITY;
+    }
+    if value <= 1.0 {
+        let mut result = -value.ln() - EULER_GAMMA;
+        let mut factor = 1.0;
+        for index in 1..=MAX_ITERATIONS {
+            #[allow(clippy::cast_precision_loss)]
+            let iteration = index as f64;
+            factor *= -value / iteration;
+            let delta = -factor / iteration;
+            result += delta;
+            if delta.abs() < result.abs() * EPSILON {
+                break;
+            }
+        }
+        return result;
+    }
+
+    let mut continued_denominator = value + 1.0;
+    let mut continued_numerator = 1.0 / FP_MIN;
+    let mut fraction_denominator = 1.0 / continued_denominator;
+    let mut fraction = fraction_denominator;
+    for index in 1..=MAX_ITERATIONS {
+        #[allow(clippy::cast_precision_loss)]
+        let iteration = index as f64;
+        let numerator = -(iteration * iteration);
+        continued_denominator += 2.0;
+        fraction_denominator = numerator * fraction_denominator + continued_denominator;
+        if fraction_denominator.abs() < FP_MIN {
+            fraction_denominator = FP_MIN;
+        }
+        continued_numerator = continued_denominator + numerator / continued_numerator;
+        if continued_numerator.abs() < FP_MIN {
+            continued_numerator = FP_MIN;
+        }
+        fraction_denominator = 1.0 / fraction_denominator;
+        let delta = continued_numerator * fraction_denominator;
+        fraction *= delta;
+        if (delta - 1.0).abs() < EPSILON {
+            break;
+        }
+    }
+    fraction * (-value).exp()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -382,8 +918,9 @@ mod tests {
     };
 
     use super::{
-        MAX_DRAIN_OUTPUT_BYTES, MAX_PACKET_OUTPUT_BYTES, PACKET_BYTES, Processor, ProcessorError, decode_mulaw,
-        encode_mulaw, frames_ready, quantize,
+        HOP_SIZE, MAX_DRAIN_OUTPUT_BYTES, MAX_PACKET_OUTPUT_BYTES, MINIMUM_NOISE_WINDOW, NoiseEstimator,
+        NoiseEstimatorState, PACKET_BYTES, Processor, ProcessorError, decode_mulaw, encode_mulaw, frames_ready,
+        quantize,
     };
 
     thread_local! {
@@ -449,33 +986,27 @@ mod tests {
     #[test]
     #[allow(clippy::cast_precision_loss)]
     fn default_calibration_excludes_a_window_crossing_the_intro_boundary() {
-        let sample_count = 40_480;
-        let mut packets = Vec::with_capacity(sample_count / PACKET_BYTES);
-        for packet_index in 0..sample_count / PACKET_BYTES {
-            let mut packet = [0_u8; PACKET_BYTES];
-            for (offset, byte) in packet.iter_mut().enumerate() {
-                let sample_index = packet_index * PACKET_BYTES + offset;
-                let amplitude = if sample_index < 39_936 {
-                    4_000.0
-                } else if sample_index < 40_064 {
-                    0.0
-                } else {
-                    4_800.0
-                };
-                let phase = 2.0 * std::f32::consts::PI * 1_000.0 * sample_index as f32 / 8_000.0;
-                *byte = encode_mulaw(quantize(amplitude * phase.sin()));
-            }
-            packets.push(packet);
+        let mut processor = Processor::new();
+        let packet = [0xff; PACKET_BYTES];
+        let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
+        for _ in 0..250 {
+            processor.push_packet(&packet, &mut output).unwrap();
+        }
+        assert_eq!(processor.accepted_samples, 40_000);
+        assert!(!processor.snr_initialized);
+        match &processor.noise_estimator {
+            NoiseEstimatorState::MinimumNoise(state) => assert_eq!(state.cursor, 311 % MINIMUM_NOISE_WINDOW),
+            NoiseEstimatorState::Mcra(state) => assert_eq!(state.baseline_frames, 311),
+            NoiseEstimatorState::SppMmse(state) => assert_eq!(state.baseline_frames, 311),
         }
 
-        let mut default = Processor::new();
-        let default_output = collect(&mut default, &packets);
-        let mut earlier_boundary = Processor::with_quiet_intro(Duration::from_millis(4_976)).unwrap();
-        let earlier_output = collect(&mut earlier_boundary, &packets);
-        assert_eq!(default_output.len(), sample_count);
-        assert_eq!(earlier_output.len(), sample_count);
-
-        assert_eq!(&default_output[40_192..40_320], &earlier_output[40_192..40_320]);
+        processor.push_packet(&packet, &mut output).unwrap();
+        assert!(processor.snr_initialized);
+        match &processor.noise_estimator {
+            NoiseEstimatorState::MinimumNoise(state) => assert_eq!(state.cursor, 312 % MINIMUM_NOISE_WINDOW),
+            NoiseEstimatorState::Mcra(state) => assert_eq!(state.baseline_frames, 311),
+            NoiseEstimatorState::SppMmse(state) => assert_eq!(state.baseline_frames, 311),
+        }
     }
 
     #[test]
@@ -491,20 +1022,23 @@ mod tests {
             }
         }
 
-        let output_window = |duration| {
+        let first_output_window = |duration| {
             let mut processor = Processor::with_quiet_intro(duration).unwrap();
             let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
-            let mut written = 0;
+            let mut first_window = [0_u8; HOP_SIZE];
+            let mut captured = false;
             for packet in &packets {
-                written = processor.push_packet(packet, &mut output).unwrap();
+                let written = processor.push_packet(packet, &mut output).unwrap();
+                if written > 0 && !captured {
+                    first_window.copy_from_slice(&output[..HOP_SIZE]);
+                    captured = true;
+                }
             }
-            assert_eq!(written, MAX_PACKET_OUTPUT_BYTES);
-            let mut window = [0_u8; 128];
-            window.copy_from_slice(&output[..128]);
-            window
+            assert!(captured);
+            first_window
         };
-        let partial_window = output_window(Duration::from_millis(31));
-        let complete_window = output_window(Duration::from_millis(32));
+        let partial_window = first_output_window(Duration::from_millis(31));
+        let complete_window = first_output_window(Duration::from_millis(32));
         let energy = |samples: &[u8]| {
             samples
                 .iter()
@@ -514,7 +1048,166 @@ mod tests {
                 })
                 .sum::<i64>()
         };
-        assert!(energy(&complete_window) * 2 < energy(&partial_window));
+        assert!(energy(&complete_window) > energy(&partial_window) * 2);
+    }
+
+    #[test]
+    fn every_estimator_uses_floored_quiet_intro_and_the_first_crossing_frame() {
+        let estimators = [NoiseEstimator::MinimumNoise, NoiseEstimator::Mcra, NoiseEstimator::SppMmse];
+        let packet = [0x00; PACKET_BYTES];
+        for estimator in estimators {
+            let mut short = Processor::with_estimator_and_quiet_intro(estimator, Duration::from_millis(31)).unwrap();
+            let mut exact = Processor::with_estimator_and_quiet_intro(estimator, Duration::from_millis(32)).unwrap();
+            assert_eq!(short.calibration_samples, 248);
+            assert_eq!(exact.calibration_samples, 256);
+            let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
+            for _ in 0..2 {
+                short.push_packet(&packet, &mut output).unwrap();
+                exact.push_packet(&packet, &mut output).unwrap();
+            }
+            assert!(short.snr_initialized);
+            assert!(!exact.snr_initialized);
+            assert!(short.tonal.initialized);
+            assert!(exact.tonal.initialized);
+            match (&short.noise_estimator, &exact.noise_estimator) {
+                (NoiseEstimatorState::MinimumNoise(_), NoiseEstimatorState::MinimumNoise(_)) => {}
+                (NoiseEstimatorState::Mcra(short_state), NoiseEstimatorState::Mcra(exact_state)) => {
+                    assert_eq!(short_state.baseline_frames, 0);
+                    assert_eq!(exact_state.baseline_frames, 1);
+                }
+                (NoiseEstimatorState::SppMmse(short_state), NoiseEstimatorState::SppMmse(exact_state)) => {
+                    assert_eq!(short_state.baseline_frames, 0);
+                    assert_eq!(exact_state.baseline_frames, 1);
+                }
+                _ => panic!("the selected estimator changed during the call"),
+            }
+            short.push_packet(&packet, &mut output).unwrap();
+            exact.push_packet(&packet, &mut output).unwrap();
+            assert!(short.snr_initialized);
+            assert!(exact.snr_initialized);
+        }
+        let floored =
+            Processor::with_estimator_and_quiet_intro(NoiseEstimator::Mcra, Duration::new(0, 31_999_999)).unwrap();
+        assert_eq!(floored.calibration_samples, 255);
+    }
+
+    #[test]
+    fn a_padded_drain_frame_inside_the_intro_does_not_train_any_estimator() {
+        for estimator in [NoiseEstimator::MinimumNoise, NoiseEstimator::Mcra, NoiseEstimator::SppMmse] {
+            let mut processor = Processor::with_estimator_and_quiet_intro(estimator, Duration::from_secs(1)).unwrap();
+            let packet = [0x00; PACKET_BYTES];
+            let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
+            assert_eq!(processor.push_packet(&packet, &mut output).unwrap(), 0);
+            let mut tail = [0_u8; MAX_DRAIN_OUTPUT_BYTES];
+            assert_eq!(processor.drain(&mut tail).unwrap(), PACKET_BYTES);
+            match &processor.noise_estimator {
+                NoiseEstimatorState::MinimumNoise(state) => assert!(!state.initialized),
+                NoiseEstimatorState::Mcra(state) => {
+                    assert_eq!(state.baseline_frames, 0);
+                    assert!(!state.initialized);
+                }
+                NoiseEstimatorState::SppMmse(state) => {
+                    assert_eq!(state.baseline_frames, 0);
+                    assert!(!state.initialized);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn selectable_estimators_produce_finite_bounded_state_and_keep_their_choice() {
+        let estimators = [NoiseEstimator::MinimumNoise, NoiseEstimator::Mcra, NoiseEstimator::SppMmse];
+        let packets = (0..24)
+            .map(|packet_index| {
+                std::array::from_fn(|offset| {
+                    let sample_index = packet_index * PACKET_BYTES + offset;
+                    let phase = 2.0 * std::f32::consts::PI * 1_375.0 * sample_index as f32 / 8_000.0;
+                    encode_mulaw(quantize(3_000.0 * phase.sin()))
+                })
+            })
+            .collect::<Vec<_>>();
+        for estimator in estimators {
+            let mut processor =
+                Processor::with_estimator_and_quiet_intro(estimator, Duration::from_millis(32)).unwrap();
+            let output = collect(&mut processor, &packets);
+            assert_eq!(output.len(), packets.len() * PACKET_BYTES);
+            assert!(processor.noise_psd.iter().all(|value| value.is_finite() && *value >= 0.0 && *value < 1e20));
+            assert!(processor.previous_clean_snr.iter().all(|value| value.is_finite() && *value >= 0.0));
+            match (&processor.noise_estimator, estimator) {
+                (NoiseEstimatorState::MinimumNoise(_), NoiseEstimator::MinimumNoise)
+                | (NoiseEstimatorState::Mcra(_), NoiseEstimator::Mcra)
+                | (NoiseEstimatorState::SppMmse(_), NoiseEstimator::SppMmse) => {}
+                _ => panic!("the processor did not retain its selected estimator"),
+            }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn tonal_detector_reduces_a_narrow_peak_from_original_frame_power() {
+        let packets = (0..16)
+            .map(|packet_index| {
+                std::array::from_fn(|offset| {
+                    let sample_index = packet_index * PACKET_BYTES + offset;
+                    let phase = 2.0 * std::f32::consts::PI * 3_000.0 * sample_index as f32 / 8_000.0;
+                    encode_mulaw(quantize(4_000.0 * phase.sin()))
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut processor = Processor::with_quiet_intro(Duration::from_millis(32)).unwrap();
+        let output = collect(&mut processor, &packets);
+        assert_eq!(output.len(), packets.len() * PACKET_BYTES);
+        assert!((0.5..1.0).contains(&processor.tonal.gain[96]));
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn quiet_intro_seeds_tonal_history_without_enhancing_it_before_the_first_crossing() {
+        let packets = (0..5)
+            .map(|packet_index| {
+                std::array::from_fn(|offset| {
+                    let sample_index = packet_index * PACKET_BYTES + offset;
+                    let amplitude = if sample_index < 512 { 500.0 } else { 8_000.0 };
+                    let phase = 2.0 * std::f32::consts::PI * 3_000.0 * sample_index as f32 / 8_000.0;
+                    encode_mulaw(quantize(amplitude * phase.sin()))
+                })
+            })
+            .collect::<Vec<_>>();
+        let input = packets.iter().flat_map(|packet| packet.iter().copied()).collect::<Vec<_>>();
+        let energy = |samples: &[u8]| {
+            samples
+                .iter()
+                .map(|byte| {
+                    let sample = i64::from(decode_mulaw(*byte));
+                    sample * sample
+                })
+                .sum::<i64>()
+        };
+
+        for estimator in [NoiseEstimator::MinimumNoise, NoiseEstimator::Mcra, NoiseEstimator::SppMmse] {
+            let mut processor =
+                Processor::with_estimator_and_quiet_intro(estimator, Duration::from_millis(64)).unwrap();
+            let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
+            let mut calibration_output = Vec::new();
+            for packet in &packets[..3] {
+                let written = processor.push_packet(packet, &mut output).unwrap();
+                calibration_output.extend_from_slice(&output[..written]);
+            }
+            assert_eq!(calibration_output.len(), HOP_SIZE * 2);
+            assert!(energy(&calibration_output) * 10 > energy(&input[..HOP_SIZE * 2]) * 9);
+            assert!(processor.tonal.gain[96] < 1.0);
+
+            let written = processor.push_packet(&packets[3], &mut output).unwrap();
+            assert_eq!(written, HOP_SIZE * 2);
+            assert!(energy(&output[..HOP_SIZE]) * 10 > energy(&input[HOP_SIZE * 2..HOP_SIZE * 3]) * 9);
+            assert!(energy(&output[HOP_SIZE..HOP_SIZE * 2]) * 4 < energy(&input[HOP_SIZE * 3..HOP_SIZE * 4]) * 3);
+            assert!(processor.tonal.gain[96] < 0.7);
+
+            let written = processor.push_packet(&packets[4], &mut output).unwrap();
+            assert!(written >= HOP_SIZE);
+            assert!(energy(&output[..HOP_SIZE]) * 4 < energy(&input[512..640]) * 3);
+        }
     }
 
     #[test]
@@ -600,7 +1293,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::cast_precision_loss)]
-    fn reset_discards_pending_samples_and_restarts_the_stream() {
+    fn reset_discards_pending_samples_and_restarts_each_selected_stream() {
         let tone_packets = |frequency_hz: f32, later_amplitude: f32, packet_count: usize| {
             (0..packet_count)
                 .map(|packet_index| {
@@ -614,29 +1307,32 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let calibration = Duration::from_millis(32);
-        let mut processor = Processor::with_quiet_intro(calibration).unwrap();
-        let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
-        for packet in tone_packets(1_000.0, 8_000.0, 4) {
-            processor.push_packet(&packet, &mut output).unwrap();
+        for estimator in [NoiseEstimator::MinimumNoise, NoiseEstimator::Mcra, NoiseEstimator::SppMmse] {
+            let mut processor = Processor::with_estimator_and_quiet_intro(estimator, calibration).unwrap();
+            let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
+            for packet in tone_packets(1_000.0, 8_000.0, 4) {
+                processor.push_packet(&packet, &mut output).unwrap();
+            }
+            assert!(processor.snr_initialized);
+            assert!(processor.high_pass.previous_output != 0.0);
+            assert!(processor.overlap.iter().any(|sample| *sample != 0.0));
+            assert!(processor.accepted_samples > processor.emitted_samples);
+
+            let new_stream = tone_packets(1_500.0, 100.0, 16);
+            processor.reset();
+            assert_eq!(processor.calibration_samples, calibration.as_nanos() * 8_000 / 1_000_000_000);
+            let after_reset = collect(&mut processor, &new_stream);
+
+            let mut fresh = Processor::with_estimator_and_quiet_intro(estimator, calibration).unwrap();
+            let fresh_output = collect(&mut fresh, &new_stream);
+            assert_eq!(after_reset, fresh_output);
+            assert_eq!(after_reset.len(), new_stream.len() * PACKET_BYTES);
         }
-        assert!(processor.noise_trained);
-        assert!(processor.high_pass.previous_output != 0.0);
-        assert!(processor.overlap.iter().any(|sample| *sample != 0.0));
-        assert!(processor.accepted_samples > processor.emitted_samples);
-
-        let new_stream = tone_packets(1_500.0, 100.0, 16);
-        processor.reset();
-        let after_reset = collect(&mut processor, &new_stream);
-
-        let mut fresh = Processor::with_quiet_intro(calibration).unwrap();
-        let fresh_output = collect(&mut fresh, &new_stream);
-        assert_eq!(after_reset, fresh_output);
-        assert_eq!(after_reset.len(), new_stream.len() * PACKET_BYTES);
     }
 
     #[test]
     #[allow(clippy::cast_precision_loss)]
-    fn default_spectral_gate_reduces_quiet_noise_and_keeps_an_above_floor_tone() {
+    fn default_log_mmse_reduces_quiet_noise_and_keeps_an_above_floor_tone() {
         let sample_count = 52_000;
         let mut packets = Vec::with_capacity(sample_count / PACKET_BYTES);
         for packet_index in 0..sample_count / PACKET_BYTES {
@@ -669,18 +1365,20 @@ mod tests {
 
     #[test]
     fn initialized_push_and_drain_do_not_allocate() {
-        let mut processor = Processor::with_quiet_intro(Duration::ZERO).unwrap();
         let packet = [0xff; PACKET_BYTES];
-        let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
-        let mut tail = [0_u8; MAX_DRAIN_OUTPUT_BYTES];
-        ALLOCATION_COUNT.store(0, Ordering::Relaxed);
-        TRACK_THIS_THREAD.with(|enabled| enabled.set(true));
-        for _ in 0..4 {
-            processor.push_packet(&packet, &mut output).unwrap();
+        for estimator in [NoiseEstimator::MinimumNoise, NoiseEstimator::Mcra, NoiseEstimator::SppMmse] {
+            let mut processor = Processor::with_estimator_and_quiet_intro(estimator, Duration::ZERO).unwrap();
+            let mut output = [0_u8; MAX_PACKET_OUTPUT_BYTES];
+            let mut tail = [0_u8; MAX_DRAIN_OUTPUT_BYTES];
+            ALLOCATION_COUNT.store(0, Ordering::Relaxed);
+            TRACK_THIS_THREAD.with(|enabled| enabled.set(true));
+            for _ in 0..4 {
+                processor.push_packet(&packet, &mut output).unwrap();
+            }
+            processor.drain(&mut tail).unwrap();
+            TRACK_THIS_THREAD.with(|enabled| enabled.set(false));
+            assert_eq!(ALLOCATION_COUNT.load(Ordering::Relaxed), 0);
         }
-        processor.drain(&mut tail).unwrap();
-        TRACK_THIS_THREAD.with(|enabled| enabled.set(false));
-        assert_eq!(ALLOCATION_COUNT.load(Ordering::Relaxed), 0);
     }
 
     #[allow(clippy::cast_precision_loss)]
