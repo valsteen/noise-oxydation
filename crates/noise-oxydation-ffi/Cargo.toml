@@ -1,0 +1,16 @@
+[package]
+name = "noise-oxydation-ffi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Static C ABI for the noise-oxydation packet processor"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+noise-oxydation-core = { path = "../noise-oxydation-core" }
+
+[lints]
+workspace = true

@@ -38,8 +38,8 @@ const NIGHT: Palette = Palette {
 };
 
 const DIAGRAM: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="2650" viewBox="0 0 1280 2650" role="img" aria-labelledby="title description">
-<title id="title">Noise Oxydation Core: crate boundary and ordered audio path</title>
-<desc id="description">One production Rust crate depends on realfft. A 160-byte mu-law packet passes in order through framing, estimation, suppression, reconstruction, and output.</desc>
+<title id="title">Noise Oxydation: Go boundary and ordered audio path</title>
+<desc id="description">The Go package calls a Rust static C ABI over the Rust core, which depends on realfft. A 160-byte mu-law packet passes in order through framing, estimation, suppression, reconstruction, and output.</desc>
 <defs>
   <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="__GRID__" stroke-width="1"/></pattern>
   <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto"><path d="M0 0L12 6L0 12Z" fill="__CONNECTOR__"/></marker>
@@ -49,35 +49,50 @@ const DIAGRAM: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1280" he
 <rect width="1280" height="2650" fill="url(#grid)" opacity="0.72"/>
 <rect x="32" y="32" width="1216" height="2586" fill="none" stroke="__FRAME__" stroke-width="2"/>
 <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" fill="__TEXT__">
-  <text class="canvas-label" x="72" y="96" font-size="30" font-weight="700">How one Rust call works</text>
-  <text class="canvas-label" x="72" y="128" font-size="16" fill="__QUIET__">One production crate · ordered work within a Processor · independent calls may run concurrently</text>
+  <text class="canvas-label" x="72" y="96" font-size="30" font-weight="700">How one Go packet reaches the Rust core</text>
+  <text class="canvas-label" x="72" y="128" font-size="16" fill="__QUIET__">Go owns the handle · Rust owns packet state and DSP · independent calls may run concurrently</text>
 
   <rect x="60" y="170" width="1160" height="390" fill="none" stroke="__FRAME__" stroke-width="2"/>
-  <text class="canvas-label" x="88" y="210" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.2" fill="__ACCENT__">01 / CRATE OWNERSHIP</text>
-  <rect x="95" y="245" width="700" height="280" fill="none" stroke="__FRAME__" stroke-width="2"/>
-  <text class="canvas-label" x="120" y="276" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">CARGO WORKSPACE</text>
-  <text class="canvas-label" x="550" y="276" font-size="15" fill="__QUIET__">1 production member</text>
+  <text class="canvas-label" x="88" y="210" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1.2" fill="__ACCENT__">01 / GO AND RUST OWNERSHIP</text>
+  <rect x="95" y="245" width="615" height="280" fill="none" stroke="__FRAME__" stroke-width="2"/>
+  <text class="canvas-label" x="120" y="276" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">CARGO WORKSPACE · 2 PRODUCTION CRATES</text>
 
   <g>
-    <rect x="120" y="300" width="615" height="205" fill="__CARD__" stroke="__BORDER__" stroke-width="2"/>
-    <rect x="120" y="300" width="7" height="205" fill="__ACCENT__"/>
-    <text x="148" y="337" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">PRODUCTION CRATE</text>
-    <text x="148" y="370" font-size="22" font-weight="650">noise-oxydation-core</text>
-    <text x="148" y="397" font-size="15" fill="__QUIET__">packet processor and call-local DSP state</text>
-    <rect x="145" y="425" width="565" height="62" fill="__CANVAS__" stroke="__BORDER__" stroke-width="1.5"/>
-    <rect x="145" y="425" width="5" height="62" fill="__ACCENT__"/>
-    <text x="164" y="449" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="0.8" fill="__ACCENT__">EXAMPLE TARGET</text>
-    <text x="164" y="474" font-size="16" font-weight="600">examples/replay.rs · not a separate crate</text>
+    <rect x="120" y="300" width="565" height="85" fill="__CARD__" stroke="__BORDER__" stroke-width="2"/>
+    <rect x="120" y="300" width="7" height="85" fill="__ACCENT__"/>
+    <text x="148" y="329" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">CORE DSP OWNER</text>
+    <text x="148" y="357" font-size="21" font-weight="650">noise-oxydation-core</text>
+    <text x="438" y="357" font-size="14" fill="__QUIET__">packet state · realfft</text>
+
+    <rect x="120" y="415" width="565" height="80" fill="__CARD__" stroke="__BORDER__" stroke-width="2"/>
+    <rect x="120" y="415" width="7" height="80" fill="__ACCENT__"/>
+    <text x="148" y="444" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">STATIC C ABI</text>
+    <text x="148" y="473" font-size="21" font-weight="650">noise-oxydation-ffi</text>
+    <text x="405" y="473" font-size="14" fill="__QUIET__">opaque handle · statuses</text>
+    <text x="120" y="516" font-size="13" fill="__QUIET__">examples/replay.rs stays with core</text>
   </g>
 
-  <path d="M735 400H930" fill="none" stroke="__CONNECTOR__" stroke-width="2.5" marker-end="url(#arrow)"/>
-  <text class="canvas-label" x="798" y="386" font-size="14" text-anchor="middle" fill="__QUIET__">direct dependency</text>
+  <path d="M402 415V390" fill="none" stroke="__CONNECTOR__" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text class="canvas-label" x="431" y="402" font-size="12" fill="__QUIET__">depends on</text>
+
   <g>
-    <rect x="930" y="335" width="245" height="130" fill="__CARD__" stroke="__BORDER__" stroke-width="2"/>
-    <rect x="930" y="335" width="7" height="130" fill="__ACCENT__"/>
-    <text x="956" y="369" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">DEPENDENCY</text>
-    <text x="956" y="402" font-size="22" font-weight="650">realfft</text>
-    <text x="956" y="430" font-size="15" fill="__QUIET__">real-valued transforms</text>
+    <rect x="785" y="245" width="400" height="120" fill="__CARD__" stroke="__BORDER__" stroke-width="2"/>
+    <rect x="785" y="245" width="7" height="120" fill="__ACCENT__"/>
+    <text x="812" y="276" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">GO PACKAGE</text>
+    <text x="812" y="309" font-size="20" font-weight="650">bindings/go</text>
+    <text x="812" y="335" font-size="14" fill="__QUIET__">cgo · private C types · reusable buffers</text>
+    <text x="812" y="354" font-size="13" fill="__QUIET__">links the checkout-built static archive</text>
+  </g>
+  <path d="M785 304H755V455H710" fill="none" stroke="__CONNECTOR__" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text class="canvas-label" x="761" y="394" font-size="12" fill="__QUIET__" transform="rotate(-90 761 394)">calls ABI</text>
+
+  <path d="M685 340H870V455H930" fill="none" stroke="__CONNECTOR__" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <g>
+    <rect x="930" y="415" width="255" height="90" fill="__CARD__" stroke="__BORDER__" stroke-width="2"/>
+    <rect x="930" y="415" width="7" height="90" fill="__ACCENT__"/>
+    <text x="956" y="446" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" letter-spacing="1" fill="__ACCENT__">TRANSFORM DEPENDENCY</text>
+    <text x="956" y="477" font-size="21" font-weight="650">realfft</text>
+    <text x="1040" y="477" font-size="14" fill="__QUIET__">real-valued FFT</text>
   </g>
 
   <rect x="60" y="600" width="1160" height="2020" fill="none" stroke="__FRAME__" stroke-width="2"/>
