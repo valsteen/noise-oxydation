@@ -10,14 +10,6 @@ The accepted reference bytes were verified at commit `cfc7520a0625da90e4ad469954
 
 The cgo boundary calls one opaque Rust processor in process. It keeps DSP and per-call state in Rust, returns bounded status values, and avoids a subprocess hop in every 20 ms packet call. The static archive must be built from the same source checkout before Go builds on macOS or Linux. No subprocess timing comparison or cross-host scheduling claim is made.
 
-## Go integration boundary
-
-The integration uses one synchronous Rust static C ABI and a thin cgo Go package. Inspection of the exact pinned tree confirms that the README's `Pipeline` is a consumer-composed example, not an importable production pipeline package. `dsp/processor.go` is a generic ordered processor composition, and `codec/codec.go` is one Go codec component. The reference does not supply a Go package for calling this Rust processor.
-
-The accepted reference bytes were verified at commit `cfc7520a0625da90e4ad4699541a6ffe98e7c637`: `README.md` SHA-256 `b28e12baf67878da516574ec0e4f99dfb9f53974dcf3cafab961ce625e7f93f4`, `go.mod` SHA-256 `de2d70cd0dff2fa9b366be6a6f39f49445b37bccd819596bb1a3d7bd099807cb`, `dsp/processor.go` SHA-256 `a9eaf86cbc104852d04c629ed9e6d5e4233c6cef84597474370bf05339e47d45`, and `codec/codec.go` SHA-256 `eaa23c191af82c9a7672d68423e669d7878d33e342d424d52c3c1bbdb96c2e5c`. Its `go.mod` declares Go 1.26.6. These sources were used to inspect the reference surface; the Go reference is not a runtime dependency.
-
-The cgo boundary calls one opaque Rust processor in process. It keeps DSP and per-call state in Rust, returns bounded status values, and avoids a subprocess hop in every 20 ms packet call. The static archive must be built from the same source checkout before Go builds on macOS or Linux. No subprocess timing comparison or cross-host scheduling claim is made.
-
 ## Evidence classification
 
 | Claim | Classification | Notes |
