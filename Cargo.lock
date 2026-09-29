@@ -16,6 +16,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "noise-oxydation-ffi"
+version = "0.1.0"
+dependencies = [
+ "noise-oxydation-core",
+]
+
+[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

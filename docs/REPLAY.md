@@ -49,3 +49,20 @@ The measured command was `cargo +1.98.1 run --release --locked --package noise-o
 The plausible custom hot loops are the 129-bin per-frame estimator and suppression passes, plus small packet and codec loops; the FFT itself is delegated to `realfft`. The release scalar profile is the baseline. No portable explicit SIMD candidate was selected or benchmarked, so no SIMD output-equivalence comparison was performed and no end-to-end SIMD gain is claimed. No minitrace comparison was run; this offline example already reports per-call measurements and no tracing consumer or measured benefit was established. Neither SIMD nor minitrace was added. The replay does not measure end-to-end scheduling or hard real-time behavior.
 
 One utterance with seeded synthetic uniform noise does not establish general speech quality, robustness to natural or nonstationary noise, performance on other hosts, or numerical parity with the pinned Go reference. Those questions require separate representative evidence.
+
+
+## Go wrapper measurement
+
+The Go measurement command accepts an external raw μ-law input. For the recorded run, the verified 133,240-sample PCM16 mono 8 kHz `clean.wav` was converted with FFmpeg 8.0.1 to a raw μ-law stream using `-ar 8000 -ac 1 -c:a pcm_mulaw -f mulaw`. The resulting input contained 133,240 bytes and had SHA-256 `db6f1f2ea35fddeaa791aaaebf652c8baf00dcffe7a998d7b2f85b99b34c2e48`. Its source WAV SHA-256 is `ea3f2a5f62e7e8c5751609927f47101de09ff61a9be691b2792540bbaa0b70b1`; both files remained outside the checkout.
+
+Run it from `bindings/go` after building the Rust static archive:
+
+```sh
+cargo +1.98.1 build --release --locked --package noise-oxydation-ffi
+cd bindings/go
+CGO_ENABLED=1 go run ./cmd/measure /path/to/clean.ulaw
+```
+
+The command prepends 40,000 μ-law silence bytes for the default five-second quiet calibration, pads its final packet with μ-law silence, and reuses fixed packet and output arrays. It performs one Go heap-allocation pass and a separate timed pass so reporting and percentile sorting do not enter packet timings. Allocations per packet count Go heap allocations during Push and Drain; they do not measure the Rust allocator.
+
+The run on 2026-09-29 used macOS 15.5 (`darwin/arm64`), Go 1.27.1, and the repository's Rust 1.98.1 static archive. It processed 1,083 packets, including the calibration prefix and final padding. The measured pass recorded 1.0009 Go allocations and 8.01 allocated bytes per packet. Push latency was p50 `0.016 ms`, p95 `0.039 ms`, p99 `0.056 ms`, and maximum `0.105 ms`; one drain took `0.033 ms`. Push p99 and maximum were 0.3% and 0.5% of the 20 ms packet cadence. These are single-host call timings for this input, not scheduling guarantees, cross-host performance, or audio-quality evidence.
